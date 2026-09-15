@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "E-IZICUT",
+    "slug": "e-izicut",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -13,9 +13,9 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000000"
-      },
+  "icon": "./assets/images/icon.png",
+  "backgroundColor": "#ffffff"
+}
       "package": "com.emergent.watpersizicut.laun2w"
     },
     "web": {
