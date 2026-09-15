@@ -17,7 +17,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, Personnel } from "@/src/api/client";
 import { Icon } from "@/src/components/icon";
-import { metaFor } from "@/src/constants/leave";
+import { LEAVE_ORDER, metaFor } from "@/src/constants/leave";
 import { useAuth } from "@/src/context/auth";
 import { makeStyles, useTheme } from "@/src/theme";
 import { formatDate, initials } from "@/src/utils/format";
@@ -37,6 +37,7 @@ export default function Dashboard() {
   const [q, setQ] = useState("");
   const [year, setYear] = useState<number | null>(null);
   const [satfung, setSatfung] = useState<string | null>(null);
+  const [jenis, setJenis] = useState<string | null>(null);
 
   const yearsQ = useQuery({ queryKey: ["years"], queryFn: () => api.years() });
   const activeYear = year ?? yearsQ.data?.[0] ?? null;
@@ -53,14 +54,15 @@ export default function Dashboard() {
     enabled: activeYear != null,
   });
 
-  const browsing = q.trim().length > 0 || !!satfung;
+  const browsing = q.trim().length > 0 || !!satfung || !!jenis;
 
   const personnelQ = useQuery({
-    queryKey: ["personnel", activeYear, satfung, q.trim()],
+    queryKey: ["personnel", activeYear, satfung, jenis, q.trim()],
     queryFn: () =>
       api.listPersonnel({
         tahun: activeYear ?? undefined,
         satfung: satfung ?? undefined,
+        jenis: jenis ?? undefined,
         q: q.trim() || undefined,
       }),
     enabled: activeYear != null && browsing,
@@ -158,6 +160,7 @@ export default function Dashboard() {
                 Haptics.selectionAsync().catch(() => {});
                 setYear(y);
                 setSatfung(null);
+                setJenis(null);
               }}
               style={[styles.chip, active && styles.chipActive]}
             >
@@ -198,8 +201,44 @@ export default function Dashboard() {
         })}
       </ScrollView>
 
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipRow}
+        style={styles.chipScroller}
+      >
+        <Pressable
+          testID="jenis-chip-all"
+          onPress={() => { Haptics.selectionAsync().catch(() => {}); setJenis(null); }}
+          style={[styles.chip, !jenis && styles.chipActive]}
+        >
+          <Icon name="FunnelSimple" size={14} color={!jenis ? colors.onBrandTertiary : colors.muted} />
+          <Text style={[styles.chipText, !jenis && styles.chipTextActive]}>Semua Jenis</Text>
+        </Pressable>
+        {LEAVE_ORDER.map((k) => {
+          const meta = metaFor(k);
+          const active = jenis === k;
+          return (
+            <Pressable
+              key={k}
+              testID={`jenis-chip-${k}`}
+              onPress={() => { Haptics.selectionAsync().catch(() => {}); setJenis(active ? null : k); }}
+              style={[styles.chip, active && styles.chipActive]}
+            >
+              <Icon name={meta.icon} size={14} color={active ? colors.brandPrimary : colors.muted} weight={active ? "fill" : "regular"} />
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{meta.short}</Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+
       {!browsing ? (
-        <DashboardBody stats={statsQ.data} loading={statsQ.isLoading} onOpen={openProfile} />
+        <DashboardBody
+          stats={statsQ.data}
+          loading={statsQ.isLoading}
+          onOpen={openProfile}
+          onRekap={() => router.push(`/rekap?tahun=${activeYear ?? ""}`)}
+        />
       ) : (
         <View style={styles.listHint}>
           <Text style={styles.listHintText}>
@@ -241,10 +280,12 @@ function DashboardBody({
   stats,
   loading,
   onOpen,
+  onRekap,
 }: {
   stats?: import("@/src/api/client").Stats;
   loading: boolean;
   onOpen: (id: string) => void;
+  onRekap: () => void;
 }) {
   const styles = useStyles();
   const { colors } = useTheme();
@@ -253,6 +294,15 @@ function DashboardBody({
   }
   return (
     <View style={styles.dash}>
+      <Pressable testID="rekap-button" onPress={onRekap} style={({ pressed }) => [styles.rekapBtn, pressed && styles.pressed]}>
+        <View style={styles.rekapIcon}><Icon name="ChartBar" size={20} color={colors.brandPrimary} weight="fill" /></View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.rekapTitle}>Rekap Satfung</Text>
+          <Text style={styles.rekapSub}>Ringkasan bulanan & satfung paling sering izin/cuti</Text>
+        </View>
+        <Icon name="CaretRight" size={18} color={colors.brandPrimary} />
+      </Pressable>
+
       <View style={styles.bentoRow}>
         <View style={[styles.bento, styles.bentoGold]} testID="stat-total-personil">
           <Icon name="Users" size={22} color={colors.onBrandPrimary} weight="fill" />
@@ -361,6 +411,13 @@ const useStyles = makeStyles((colors) => ({
   listHintText: { color: colors.muted, fontFamily: "DMSans", fontSize: 13 },
 
   dash: { paddingHorizontal: 16, paddingTop: 8 },
+  rekapBtn: {
+    flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 16,
+    backgroundColor: "rgba(212,175,55,0.06)", borderRadius: 14, borderWidth: 1, borderColor: colors.brandPrimary, padding: 14,
+  },
+  rekapIcon: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.brandPrimary },
+  rekapTitle: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 18, letterSpacing: 0.5 },
+  rekapSub: { color: colors.muted, fontFamily: "DMSans", fontSize: 12, marginTop: 1 },
   bentoRow: { flexDirection: "row", gap: 12, marginBottom: 12 },
   bento: { flex: 1, borderRadius: 16, padding: 16, justifyContent: "space-between", minHeight: 132 },
   bentoGold: { backgroundColor: colors.brandPrimary },

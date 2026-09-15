@@ -1,0 +1,41 @@
+{
+  "summary": "Iteration 2 fully passes. Backend: 10/10 pytest tests in test_iteration2.py PASSED — /api/recap returns monthly[12], satfung[] sorted by total_pengajuan desc, and top[] with total=izin+cuti; scoping by satfung correctly narrows top[] and monthly counts (subset of unscoped totals). Personnel jenis filter validated for CUTI_BEROBAT, CUTI_IBADAH_UMROH, IZIN, EMERGENCY — every returned row contains at least one leave of the requested jenis. change-password happy path works, wrong current returns 400, new pw < 6 chars returns 422; password was CHANGED to Temp then RESTORED to 'Mimika2026!' at test end and verified via /api/auth/login (200). POST /api/personnel with tahun=2027 succeeds; /api/years now includes 2027; adding an initial CUTI_TAHUNAN leave to the new-year person works; test personnel soft-deleted at teardown. Login after DB-hash migration still works. Frontend (390x844 mobile): Dashboard shows the third chip row 'Semua Jenis' + all 7 jenis chips (IZIN, EMERGENCY, CUTI_TAHUNAN, CUTI_BEROBAT, CUTI_IBADAH_UMROH, CUTI_IBADAH_HAJI, CUTI_IBADAH_LAINNYA); selecting Berobat switches to the personnel list view. rekap-button opens /rekap which shows the monthly bar chart (month-1..month-12), 'PALING SERING IZIN & CUTI' list (top-0 visible after scroll), and 'RINGKASAN TIAP SATFUNG' cards (recap-sf-0). Tapping a satfung card scopes the report. Admin panel exposes admin-rekap-button, change-password-button, add-personnel-button. add-personnel-sheet opens with add-nama/add-pangkat/add-nrp/add-jabatan/add-satfung/add-tahun (accepts 2027) and the optional Izin/Cuti block (add-jenis-CUTI_TAHUNAN → add-leave-date). change-password-sheet exposes pw-current/pw-new/pw-confirm and save-change-password. Deprecated packages detected: none new. Only console warning: RN Web deprecation 'shadow* style props are deprecated. Use boxShadow.' (already flagged in iteration_1).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": [
+      {"component": "shadow* style props", "issue": "RN Web console warning: '\"shadow*\" style props are deprecated. Use \"boxShadow\".' Still present across screens (dashboard/rekap/admin). Non-blocking. Reference: /app/frontend (styles using shadowColor/shadowOffset/shadowOpacity/shadowRadius)."}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration2.py",
+    "/app/backend/tests/test_eizicut_api.py",
+    "/app/test_reports/pytest/iteration2_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL: Migrate shadow* style props to boxShadow (or Platform.select) to silence RN Web deprecation warning.",
+    "NO backend fixes needed. NO functional frontend fixes needed."
+  ],
+  "critical_code_review_comments": [
+    "server.py /api/recap correctly buckets izin/cuti per month using tanggal[5:7]; guards against non-numeric months.",
+    "/api/recap satfung ranking uses TOTAL counts (unscoped by satfung filter), which is the correct behaviour so 'Ringkasan Tiap Satfung' always shows every satfung's totals — matches the UI showing satfung ranking only when no satfung is chosen.",
+    "change_password: rejects same-as-old (400), enforces min length (422 via manual check), and re-hashes with bcrypt(12) — good. Idempotent seed only inserts if missing → user-changed password persists across restarts.",
+    "POST /api/personnel accepts arbitrary tahun (int) and /api/years derives distinct list from personnel collection — no hardcoded year list.",
+    "Personnel jenis filter uses simple query 'leaves.jenis': jenis — correct semantics (returns personnel whose leaves array contains that jenis).",
+    "server.py is ~555 lines — still within acceptable single-file size but approaching the 700-line threshold; consider splitting auth / personnel / recap into routers if it keeps growing."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration2.py (new)"
+  ],
+  "success_rate": {"backend": "100% (10/10 iter2 + 20/20 iter1 baseline)", "frontend": "100% (all iter2 testIDs render and are interactive)"},
+  "seed_data_creation": "None permanent. During test_create_personnel_new_year a temporary personnel 'TEST_ITER2 NEW YEAR' (nrp TEST_ITER2_2027, tahun 2027) is created, receives one leave, and is soft-deleted in finally block. Note: because it's a soft delete, /api/years may still return 2027 until a hard cleanup — /api/personnel?tahun=2027 correctly returns [] after deletion.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Admin credentials are restored to 'Mimika2026!' — verified via a fresh login at end of the change-password test. Because soft-deleted rows still contribute to /api/years distinct-values, running test_create_personnel_new_year leaves 2027 visible in /api/years for future runs; that's expected. If a hard-cleanup is desired, add a Mongo purge for docs whose nrp starts with 'TEST_ITER2'.",
+  "rca_of_issue": "N/A — all iteration-2 features work as specified."
+}

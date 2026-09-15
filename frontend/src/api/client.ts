@@ -61,6 +61,14 @@ export type Stats = {
   }[];
 };
 
+export type Recap = {
+  tahun: number | null;
+  satfung_filter: string | null;
+  monthly: { bulan: number; izin: number; cuti: number }[];
+  satfung: { satfung: string; total_personil: number; total_pengajuan: number; izin: number; cuti: number }[];
+  top: { personnel_id: string; nama: string; pangkat: string; satfung: string; izin: number; cuti: number; total: number }[];
+};
+
 export const api = {
   async login(username: string, password: string) {
     const res = await fetch(`${BASE}/auth/login`, {
@@ -69,6 +77,14 @@ export const api = {
       body: JSON.stringify({ username, password }),
     });
     return handle(res) as Promise<{ access_token: string; username: string }>;
+  },
+
+  async changePassword(current_password: string, new_password: string) {
+    return handle(await fetch(`${BASE}/auth/change-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
+      body: JSON.stringify({ current_password, new_password }),
+    }));
   },
 
   async years(): Promise<number[]> {
@@ -85,11 +101,19 @@ export const api = {
     return handle(await fetch(`${BASE}/stats${qs}`));
   },
 
-  async listPersonnel(params: { tahun?: number; satfung?: string; q?: string }): Promise<Personnel[]> {
+  async recap(tahun?: number, satfung?: string): Promise<Recap> {
+    const sp = new URLSearchParams();
+    if (tahun) sp.set("tahun", String(tahun));
+    if (satfung) sp.set("satfung", satfung);
+    return handle(await fetch(`${BASE}/recap?${sp.toString()}`));
+  },
+
+  async listPersonnel(params: { tahun?: number; satfung?: string; q?: string; jenis?: string }): Promise<Personnel[]> {
     const sp = new URLSearchParams();
     if (params.tahun) sp.set("tahun", String(params.tahun));
     if (params.satfung) sp.set("satfung", params.satfung);
     if (params.q) sp.set("q", params.q);
+    if (params.jenis) sp.set("jenis", params.jenis);
     return handle(await fetch(`${BASE}/personnel?${sp.toString()}`));
   },
 

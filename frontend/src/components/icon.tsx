@@ -27,6 +27,10 @@ import {
   Briefcase,
   ListChecks,
   Info,
+  FunnelSimple,
+  ChartBar,
+  Key,
+  CalendarBlank,
   type IconProps,
 } from "phosphor-react-native";
 import React from "react";
@@ -60,6 +64,10 @@ const MAP: Record<string, React.ComponentType<IconProps>> = {
   Briefcase,
   ListChecks,
   Info,
+  FunnelSimple,
+  ChartBar,
+  Key,
+  CalendarBlank,
 };
 
 export function Icon({

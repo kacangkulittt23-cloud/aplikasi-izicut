@@ -44,11 +44,11 @@ export function DatePickerField({
   return (
     <>
       <Pressable testID={testID} onPress={() => setOpen(true)} style={styles.field}>
-        <Icon name="calendar" size={18} color={colors.brandPrimary} />
+        <Icon name="CalendarBlank" size={18} color={colors.brandPrimary} />
         <Text style={[styles.fieldText, !value && { color: colors.muted }]}>
           {value ? formatDateLong(value) : placeholder}
         </Text>
-        <Icon name="caret-right" size={16} color={colors.muted} />
+        <Icon name="CaretRight" size={16} color={colors.muted} />
       </Pressable>
 
       <Sheet visible={open} onClose={() => setOpen(false)} title="Pilih Tanggal" testID="date-picker-sheet">

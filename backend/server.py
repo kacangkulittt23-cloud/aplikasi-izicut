@@ -31,6 +31,11 @@ JWT_ALG = "HS256"
 TOKEN_DAYS = int(os.getenv("ACCESS_TOKEN_DAYS", "7"))
 ADMIN_USERNAME = os.environ["ADMIN_USERNAME"]
 ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
+ADMIN_ID = "admin-credential"
+MIN_PW = 6
+
+IZIN_GROUP = {"IZIN", "EMERGENCY"}
+CUTI_GROUP = {"CUTI_TAHUNAN", "CUTI_BEROBAT", "CUTI_IBADAH_UMROH", "CUTI_IBADAH_HAJI", "CUTI_IBADAH_LAINNYA"}
 
 app = FastAPI(title="E-IZICUT API")
 api_router = APIRouter(prefix="/api")
@@ -50,6 +55,30 @@ def now_iso():
 def clean(doc):
     doc.pop("_id", None)
     return doc
+
+
+def hash_pw(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+
+def verify_pw(pw: str, h: str) -> bool:
+    try:
+        return bcrypt.checkpw(pw.encode("utf-8"), h.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
+
+
+async def ensure_admin_credential():
+    """Idempotent seed. A password changed from inside the app is never reset."""
+    existing = await db.admin_credentials.find_one({"_id": ADMIN_ID})
+    if not existing:
+        await db.admin_credentials.insert_one({
+            "_id": ADMIN_ID,
+            "username": ADMIN_USERNAME,
+            "password_hash": hash_pw(ADMIN_PASSWORD),
+            "created_at": now_iso(),
+            "updated_at": now_iso(),
+        })
 
 
 def make_token(username: str) -> str:
@@ -87,6 +116,11 @@ def match_key(nrp: str, nama: str, tahun: int):
 class LoginIn(BaseModel):
     username: str
     password: str
+
+
+class ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: str
 
 
 class LeaveIn(BaseModel):
@@ -159,10 +193,35 @@ async def satfung(tahun: Optional[int] = None):
 # --------------------------------------------------------------------------- #
 @api_router.post("/auth/login")
 async def login(data: LoginIn):
-    ok = data.username == ADMIN_USERNAME and data.password == ADMIN_PASSWORD
+    if data.username != ADMIN_USERNAME:
+        raise HTTPException(status_code=401, detail="Username atau password salah")
+    record = await db.admin_credentials.find_one({"_id": ADMIN_ID})
+    if record and record.get("password_hash"):
+        ok = verify_pw(data.password, record["password_hash"])
+    else:
+        ok = data.password == ADMIN_PASSWORD
     if not ok:
         raise HTTPException(status_code=401, detail="Username atau password salah")
     return {"access_token": make_token(data.username), "token_type": "bearer", "username": data.username}
+
+
+@api_router.post("/auth/change-password")
+async def change_password(data: ChangePasswordIn, admin: str = Depends(require_admin)):
+    record = await db.admin_credentials.find_one({"_id": ADMIN_ID})
+    current_hash = record.get("password_hash") if record else None
+    valid = verify_pw(data.current_password, current_hash) if current_hash else (data.current_password == ADMIN_PASSWORD)
+    if not valid:
+        raise HTTPException(status_code=400, detail="Password lama salah")
+    if len(data.new_password) < MIN_PW:
+        raise HTTPException(status_code=422, detail=f"Password baru minimal {MIN_PW} karakter")
+    if data.current_password == data.new_password:
+        raise HTTPException(status_code=400, detail="Password baru harus berbeda dari yang lama")
+    await db.admin_credentials.update_one(
+        {"_id": ADMIN_ID},
+        {"$set": {"username": ADMIN_USERNAME, "password_hash": hash_pw(data.new_password), "updated_at": now_iso()}},
+        upsert=True,
+    )
+    return {"ok": True, "message": "Password berhasil diubah"}
 
 
 @api_router.get("/auth/me")
@@ -178,6 +237,7 @@ async def list_personnel(
     tahun: Optional[int] = None,
     satfung: Optional[str] = None,
     q: Optional[str] = None,
+    jenis: Optional[str] = None,
     limit: int = 500,
 ):
     query = {"deleted_at": None}
@@ -185,6 +245,8 @@ async def list_personnel(
         query["tahun"] = tahun
     if satfung:
         query["satfung"] = satfung
+    if jenis:
+        query["leaves.jenis"] = jenis
     if q:
         rx = re.escape(q.strip())
         query["$or"] = [
@@ -243,6 +305,61 @@ async def stats(tahun: Optional[int] = None):
         "total_pengajuan": total_leaves,
         "per_type": [{"key": k, "label": LEAVE_LABELS[k], "count": per_type.get(k, 0)} for k in LEAVE_TYPES],
         "recent": recent[:15],
+    }
+
+
+@api_router.get("/recap")
+async def recap(tahun: Optional[int] = None, satfung: Optional[str] = None):
+    q = {"deleted_at": None}
+    if tahun is not None:
+        q["tahun"] = tahun
+
+    monthly = {m: {"bulan": m, "izin": 0, "cuti": 0} for m in range(1, 13)}
+    sf_map = {}
+    people = {}
+    async for doc in db.personnel.find(q):
+        sf = doc.get("satfung") or "LAINNYA"
+        if sf not in sf_map:
+            sf_map[sf] = {"satfung": sf, "total_personil": 0, "total_pengajuan": 0, "izin": 0, "cuti": 0}
+        sf_map[sf]["total_personil"] += 1
+
+        in_scope = (not satfung) or sf == satfung
+        p_izin = p_cuti = 0
+        for lv in doc.get("leaves", []):
+            jenis = lv.get("jenis", "")
+            is_izin = jenis in IZIN_GROUP
+            is_cuti = jenis in CUTI_GROUP
+            sf_map[sf]["total_pengajuan"] += 1
+            sf_map[sf]["izin"] += 1 if is_izin else 0
+            sf_map[sf]["cuti"] += 1 if is_cuti else 0
+            if in_scope:
+                p_izin += 1 if is_izin else 0
+                p_cuti += 1 if is_cuti else 0
+                t = lv.get("tanggal") or ""
+                if len(t) >= 7 and t[5:7].isdigit():
+                    mo = int(t[5:7])
+                    if 1 <= mo <= 12:
+                        monthly[mo]["izin"] += 1 if is_izin else 0
+                        monthly[mo]["cuti"] += 1 if is_cuti else 0
+        if in_scope and (p_izin + p_cuti) > 0:
+            people[doc["id"]] = {
+                "personnel_id": doc["id"],
+                "nama": doc.get("nama"),
+                "pangkat": doc.get("pangkat"),
+                "satfung": sf,
+                "izin": p_izin,
+                "cuti": p_cuti,
+                "total": p_izin + p_cuti,
+            }
+
+    satfung_list = sorted(sf_map.values(), key=lambda x: x["total_pengajuan"], reverse=True)
+    top = sorted(people.values(), key=lambda x: x["total"], reverse=True)[:15]
+    return {
+        "tahun": tahun,
+        "satfung_filter": satfung,
+        "monthly": [monthly[m] for m in range(1, 13)],
+        "satfung": satfung_list,
+        "top": top,
     }
 
 
@@ -426,6 +543,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_seed():
+    await ensure_admin_credential()
 
 
 @app.on_event("shutdown")
