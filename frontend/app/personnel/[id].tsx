@@ -19,7 +19,8 @@ import { useToast } from "@/src/components/toast";
 import { LEAVE_ORDER, LeaveKey, metaFor } from "@/src/constants/leave";
 import { useAuth } from "@/src/context/auth";
 import { makeStyles, useTheme } from "@/src/theme";
-import { dmyToIso, formatDateLong, initials, isoToDmy } from "@/src/utils/format";
+import { formatDateLong, initials } from "@/src/utils/format";
+import { DatePickerField } from "@/src/components/date-picker";
 
 export default function Profile() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -254,17 +255,16 @@ function LeaveForm({
   const { colors } = useTheme();
   const toast = useToast();
   const [jenis, setJenis] = useState<LeaveKey>((edit?.jenis as LeaveKey) ?? initialJenis);
-  const [tanggal, setTanggal] = useState(edit ? isoToDmy(edit.tanggal) : "");
+  const [tanggal, setTanggal] = useState(edit?.tanggal ? edit.tanggal.slice(0, 10) : "");
   const [alasan, setAlasan] = useState(edit?.alasan ?? "");
 
   const mut = useMutation({
     mutationFn: async () => {
-      const iso = dmyToIso(tanggal);
-      if (!iso) throw new Error("Format tanggal harus DD-MM-YYYY");
+      if (!tanggal) throw new Error("Silakan pilih tanggal dulu");
       if (edit) {
-        return api.updateLeave(person.id, edit.id, { jenis, tanggal: iso, alasan });
+        return api.updateLeave(person.id, edit.id, { jenis, tanggal, alasan });
       }
-      return api.addLeave(person.id, { jenis, tanggal: iso, alasan });
+      return api.addLeave(person.id, { jenis, tanggal, alasan });
     },
     onSuccess: () => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}); onSaved(); },
     onError: (e: any) => toast(e.message, "error"),
@@ -291,25 +291,8 @@ function LeaveForm({
         })}
       </View>
 
-      <Text style={styles.fieldLabel}>Tanggal (DD-MM-YYYY)</Text>
-      <TextInput
-        testID="leave-date-input"
-        value={tanggal}
-        onChangeText={setTanggal}
-        placeholder="cth: 15-06-2026"
-        placeholderTextColor={colors.muted}
-        keyboardType="numbers-and-punctuation"
-        style={styles.input}
-      />
-      <Pressable
-        onPress={() => {
-          const d = new Date();
-          setTanggal(`${String(d.getDate()).padStart(2, "0")}-${String(d.getMonth() + 1).padStart(2, "0")}-${d.getFullYear()}`);
-        }}
-        style={styles.todayBtn}
-      >
-        <Text style={styles.todayText}>Isi tanggal hari ini</Text>
-      </Pressable>
+      <Text style={styles.fieldLabel}>Tanggal</Text>
+      <DatePickerField testID="leave-date-field" value={tanggal} onChange={setTanggal} placeholder="Ketuk untuk pilih tanggal" />
 
       <Text style={styles.fieldLabel}>Alasan / Keterangan</Text>
       <TextInput
