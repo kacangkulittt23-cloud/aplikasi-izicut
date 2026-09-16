@@ -8,3 +8,6 @@ dependencies = [
 
 [tool.fastapi]
 entrypoint = "server:app"
+
+[tool.setuptools]
+py-modules = []
