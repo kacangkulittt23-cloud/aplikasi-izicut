@@ -23,7 +23,7 @@ Aplikasi database untuk Bag SDM Polres Mimika menyimpan data izin, izin emergenc
 - Backend API: /years, /satfung, /stats, /personnel (list+search+detail), /auth/login+me, /leave-types, /template, /import, personil & leaves CRUD (admin-guarded).
 - Excel parser mendukung 2 format; seed dari file user: 2025 = 711 personil / 224 catatan, 2026 = 721 personil / 34 satfung.
 - Frontend: Dashboard/Search (hero, chips tahun & satfung, bento stats, aktivitas terbaru), Profil personil (identitas + section izin/cuti), Login admin, Panel admin (upload Excel, unduh template, tambah personil), form tambah/edit izin & personil, toast, hapus dengan konfirmasi.
-- Auth: admin/Mimika2026! (di /app/memory/test_credentials.md).
+- Auth: admin (password diatur lewat ADMIN_PASSWORD di backend/.env).
 - Diuji end-to-end via testing agent — semua lulus.
 
 ## Backlog (prioritized)
