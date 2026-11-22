@@ -67,6 +67,19 @@ export default function Profile() {
     onError: (e: any) => toast(e.message, "error"),
   });
 
+  const [confirmPerson, setConfirmPerson] = useState(false);
+  const deletePersonMut = useMutation({
+    mutationFn: () => api.deletePersonnel(id!),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["stats"] });
+      qc.invalidateQueries({ queryKey: ["personnel"] });
+      setConfirmPerson(false);
+      toast("Personil dihapus", "success");
+      router.back();
+    },
+    onError: (e: any) => toast(e.message, "error"),
+  });
+
   if (isLoading || !data) {
     return (
       <View style={[styles.container, styles.center]}>
@@ -176,6 +189,18 @@ export default function Profile() {
             <Text style={styles.noneText}>Belum ada riwayat izin / cuti</Text>
           </View>
         ) : null}
+
+        {isAdmin ? (
+          <Pressable
+            testID="delete-person-button"
+            onPress={() => setConfirmPerson(true)}
+            style={{ marginTop: 28, marginBottom: 110, alignSelf: "center", padding: 12 }}
+          >
+            <Text style={{ color: colors.onError, fontFamily: "DMSans", fontSize: 14, fontWeight: "700" }}>
+              Hapus Personil Ini
+            </Text>
+          </Pressable>
+        ) : null}
       </ScrollView>
 
       {isAdmin ? (
@@ -220,6 +245,19 @@ export default function Profile() {
           style={[styles.dangerBtn]}
         >
           {deleteLeaveMut.isPending ? <ActivityIndicator color={colors.onError} /> : <Text style={styles.dangerBtnText}>Ya, Hapus</Text>}
+        </Pressable>
+      </Sheet>
+
+      {/* Confirm delete person */}
+      <Sheet visible={confirmPerson} onClose={() => setConfirmPerson(false)} title="Hapus Personil" testID="confirm-person-sheet">
+        <Text style={styles.confirmText}>Hapus {data.nama} beserta semua catatan izin/cutinya? Data tidak akan tampil lagi di aplikasi.</Text>
+        <Pressable
+          testID="confirm-delete-person"
+          onPress={() => deletePersonMut.mutate()}
+          disabled={deletePersonMut.isPending}
+          style={[styles.dangerBtn]}
+        >
+          {deletePersonMut.isPending ? <ActivityIndicator color={colors.onError} /> : <Text style={styles.dangerBtnText}>Ya, Hapus Personil</Text>}
         </Pressable>
       </Sheet>
     </View>
