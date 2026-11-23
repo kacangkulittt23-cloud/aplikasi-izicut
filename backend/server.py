@@ -125,13 +125,15 @@ class ChangePasswordIn(BaseModel):
 
 class LeaveIn(BaseModel):
     jenis: str
-    tanggal: str  # ISO date YYYY-MM-DD
+    tanggal: str  # tanggal berangkat, ISO date YYYY-MM-DD
+    tanggal_kembali: Optional[str] = None  # tanggal kembali bertugas (opsional)
     alasan: str = ""
 
 
 class LeaveUpdate(BaseModel):
     jenis: Optional[str] = None
     tanggal: Optional[str] = None
+    tanggal_kembali: Optional[str] = None  # "" = hapus tanggal kembali
     alasan: Optional[str] = None
 
 
@@ -151,6 +153,72 @@ class PersonnelUpdate(BaseModel):
     jabatan: Optional[str] = None
     satfung: Optional[str] = None
     tahun: Optional[int] = None
+
+
+# --------------------------------------------------------------------------- #
+# Tanggal & status izin/cuti
+# --------------------------------------------------------------------------- #
+WIT = timezone(timedelta(hours=9))  # Papua (Timika) = WIT, UTC+9
+ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+AKAN_HARI = 30  # "akan berangkat" ditampilkan sampai 30 hari ke depan
+
+
+def today_wit():
+    return datetime.now(WIT).date()
+
+
+def to_date(s):
+    """ISO string -> date, atau None kalau kosong / bukan tanggal valid."""
+    if not s or not isinstance(s, str):
+        return None
+    s = s.strip()[:10]
+    if not ISO_RE.match(s):
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def classify_leave(lv, today):
+    """Status satu catatan izin/cuti terhadap tanggal `today`.
+
+    Mengembalikan (status, info) atau (None, None).
+      sedang           : tanggal berangkat <= hari ini < tanggal kembali
+      kembali_hari_ini : tanggal kembali == hari ini
+      akan             : berangkat dalam 1..AKAN_HARI hari ke depan
+    Kalau tanggal kembali kosong, dianggap izin/cuti satu hari (hanya hari berangkat).
+    """
+    start = to_date(lv.get("tanggal"))
+    if not start:
+        return None, None
+    end = to_date(lv.get("tanggal_kembali"))
+    if end and end <= start:
+        end = None  # kembali tidak masuk akal -> perlakukan sebagai satu hari
+
+    if end:
+        if start <= today < end:
+            return "sedang", {"sisa_hari": (end - today).days, "hari_ke": (today - start).days + 1}
+        if end == today and start < today:
+            return "kembali_hari_ini", {}
+        if today < start <= today + timedelta(days=AKAN_HARI):
+            return "akan", {"berangkat_dalam": (start - today).days}
+        return None, None
+
+    if start == today:
+        return "sedang", {"sisa_hari": None, "hari_ke": 1}
+    if today < start <= today + timedelta(days=AKAN_HARI):
+        return "akan", {"berangkat_dalam": (start - today).days}
+    return None, None
+
+
+def validate_leave_dates(tanggal, kembali):
+    if kembali:
+        t, k = to_date(tanggal), to_date(kembali)
+        if k is None:
+            raise HTTPException(status_code=400, detail="Format tanggal kembali tidak valid")
+        if t and k < t:
+            raise HTTPException(status_code=400, detail="Tanggal kembali tidak boleh sebelum tanggal berangkat")
 
 
 # --------------------------------------------------------------------------- #
@@ -238,7 +306,7 @@ async def list_personnel(
     satfung: Optional[str] = None,
     q: Optional[str] = None,
     jenis: Optional[str] = None,
-    limit: int = 500,
+    limit: int = 5000,
 ):
     query = {"deleted_at": None}
     if tahun is not None:
@@ -296,6 +364,7 @@ async def stats(tahun: Optional[int] = None):
                 "satfung": doc.get("satfung"),
                 "jenis": lv.get("jenis"),
                 "tanggal": lv.get("tanggal"),
+                "tanggal_kembali": lv.get("tanggal_kembali"),
                 "alasan": lv.get("alasan"),
             })
     recent.sort(key=lambda x: x.get("tanggal") or "", reverse=True)
@@ -305,6 +374,50 @@ async def stats(tahun: Optional[int] = None):
         "total_pengajuan": total_leaves,
         "per_type": [{"key": k, "label": LEAVE_LABELS[k], "count": per_type.get(k, 0)} for k in LEAVE_TYPES],
         "recent": recent[:15],
+    }
+
+
+@api_router.get("/on-leave")
+async def on_leave():
+    """Siapa yang sedang izin/cuti, kembali hari ini, dan akan berangkat.
+    Berdasarkan tanggal hari ini (WIT), semua tahun, tidak tergantung filter."""
+    today = today_wit()
+    today_s = today.isoformat()
+    query = {
+        "deleted_at": None,
+        "leaves": {"$elemMatch": {"$or": [
+            {"tanggal_kembali": {"$gte": today_s}},
+            {"tanggal": {"$gte": today_s}},
+        ]}},
+    }
+    groups = {"sedang": [], "kembali_hari_ini": [], "akan": []}
+    async for doc in db.personnel.find(query):
+        for lv in doc.get("leaves", []):
+            status_, info = classify_leave(lv, today)
+            if not status_:
+                continue
+            groups[status_].append({
+                "personnel_id": doc.get("id"),
+                "nama": doc.get("nama"),
+                "pangkat": doc.get("pangkat"),
+                "satfung": doc.get("satfung"),
+                "jenis": lv.get("jenis"),
+                "label": LEAVE_LABELS.get(lv.get("jenis"), lv.get("jenis")),
+                "tanggal": lv.get("tanggal"),
+                "tanggal_kembali": lv.get("tanggal_kembali") or None,
+                "alasan": lv.get("alasan") or "",
+                **info,
+            })
+    far = "9999-12-31"
+    groups["sedang"].sort(key=lambda x: (x.get("tanggal_kembali") or far, x["nama"] or ""))
+    groups["kembali_hari_ini"].sort(key=lambda x: x["nama"] or "")
+    groups["akan"].sort(key=lambda x: (x.get("tanggal") or far, x["nama"] or ""))
+    return {
+        "today": today_s,
+        "sedang": groups["sedang"],
+        "kembali_hari_ini": groups["kembali_hari_ini"],
+        "akan": groups["akan"],
+        "akan_hari": AKAN_HARI,
     }
 
 
@@ -413,10 +526,12 @@ async def delete_personnel(pid: str, admin: str = Depends(require_admin)):
 async def add_leave(pid: str, data: LeaveIn, admin: str = Depends(require_admin)):
     if data.jenis not in LEAVE_TYPES:
         raise HTTPException(status_code=400, detail="Jenis izin/cuti tidak valid")
+    validate_leave_dates(data.tanggal, data.tanggal_kembali)
     leave = {
         "id": str(uuid.uuid4()),
         "jenis": data.jenis,
         "tanggal": data.tanggal,
+        "tanggal_kembali": data.tanggal_kembali or None,
         "alasan": data.alasan or "",
         "source": "manual",
     }
@@ -437,6 +552,15 @@ async def update_leave(pid: str, lid: str, data: LeaveUpdate, admin: str = Depen
         raise HTTPException(status_code=400, detail="Tidak ada perubahan")
     if "jenis" in changes and changes["jenis"] not in LEAVE_TYPES:
         raise HTTPException(status_code=400, detail="Jenis izin/cuti tidak valid")
+    if "tanggal_kembali" in changes and not changes["tanggal_kembali"]:
+        changes["tanggal_kembali"] = None  # "" = hapus tanggal kembali
+    if changes.get("tanggal_kembali"):
+        cur = changes.get("tanggal")
+        if cur is None:
+            doc = await db.personnel.find_one({"id": pid, "leaves.id": lid, "deleted_at": None})
+            lv0 = next((x for x in (doc or {}).get("leaves", []) if x.get("id") == lid), {})
+            cur = lv0.get("tanggal")
+        validate_leave_dates(cur, changes["tanggal_kembali"])
     set_fields = {f"leaves.$.{k}": v for k, v in changes.items()}
     set_fields["updated_at"] = now_iso()
     res = await db.personnel.find_one_and_update(
@@ -490,47 +614,54 @@ async def import_excel(file: UploadFile = File(...), admin: str = Depends(requir
     if not parsed:
         raise HTTPException(status_code=400, detail="Tidak ada data personil ditemukan di file")
 
-    inserted = 0
-    updated = 0
-    years_seen = set()
+    from pymongo import InsertOne, UpdateOne
+
+    PLACEHOLDER = {"", "-", "--", "0", "N/A", "NA", "NIL"}
+
+    def key_of(p):
+        n = (p["nrp"] or "").strip()
+        if n.upper() not in PLACEHOLDER and len(n) >= 6:
+            return ("nrp", n, p["tahun"])
+        return ("nama", (p["nama"] or "").strip().upper(), p["tahun"])
+
+    tahun_set = {p["tahun"] for p in parsed}
+    existing = {}
+    async for d in db.personnel.find({"tahun": {"$in": list(tahun_set)}, "deleted_at": None}):
+        existing.setdefault(key_of(d), d)
+
+    ops, inserted, updated, duplikat, seen = [], 0, 0, [], set()
     for p in parsed:
-        years_seen.add(p["tahun"])
-        # assign ids to excel leaves
         for lv in p["leaves"]:
             lv["id"] = str(uuid.uuid4())
-        existing = await db.personnel.find_one(match_key(p["nrp"], p["nama"], p["tahun"]))
-        if existing:
-            manual_leaves = [lv for lv in existing.get("leaves", []) if lv.get("source") == "manual"]
-            merged = manual_leaves + p["leaves"]
-            await db.personnel.update_one(
-                {"id": existing["id"]},
-                {"$set": {
-                    "nama": p["nama"],
-                    "pangkat": p["pangkat"],
-                    "nrp": p["nrp"],
-                    "jabatan": p["jabatan"],
-                    "satfung": p["satfung"],
-                    "order": p["order"],
-                    "leaves": merged,
-                    "updated_at": now_iso(),
-                }},
-            )
+        k = key_of(p)
+        ex = existing.get(k) if k not in seen else None
+        if k in seen:
+            duplikat.append({"nama": p["nama"], "nrp": p["nrp"], "tahun": p["tahun"]})
+        seen.add(k)
+        if ex:
+            manual = [lv for lv in ex.get("leaves", []) if lv.get("source") == "manual"]
+            ops.append(UpdateOne({"id": ex["id"]}, {"$set": {
+                "nama": p["nama"], "pangkat": p["pangkat"], "nrp": p["nrp"],
+                "jabatan": p["jabatan"], "satfung": p["satfung"], "order": p["order"],
+                "leaves": manual + p["leaves"], "updated_at": now_iso()}}))
             updated += 1
         else:
             doc = dict(p)
-            doc["id"] = str(uuid.uuid4())
-            doc["created_at"] = now_iso()
-            doc["updated_at"] = now_iso()
-            doc["deleted_at"] = None
-            await db.personnel.insert_one(doc)
+            doc.update(id=str(uuid.uuid4()), created_at=now_iso(),
+                       updated_at=now_iso(), deleted_at=None)
+            ops.append(InsertOne(doc))
             inserted += 1
+
+    if ops:
+        await db.personnel.bulk_write(ops, ordered=False)
 
     return {
         "ok": True,
         "total": len(parsed),
         "ditambahkan": inserted,
         "diperbarui": updated,
-        "tahun": sorted(years_seen),
+        "duplikat_dalam_file": duplikat[:50],
+        "tahun": sorted(tahun_set),
     }
 
 
@@ -548,6 +679,11 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup_seed():
     await ensure_admin_credential()
+    try:
+        await db.personnel.create_index([("nrp", 1), ("tahun", 1)])
+        await db.personnel.create_index([("nama", 1), ("tahun", 1)])
+    except Exception as e:  # index hanya mempercepat, jangan gagalkan start
+        logger.warning("create_index gagal: %s", e)
 
 
 @app.on_event("shutdown")
