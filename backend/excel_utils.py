@@ -14,6 +14,7 @@ from datetime import datetime, date
 
 from openpyxl import load_workbook, Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 # Canonical leave categories.
 LEAVE_TYPES = [
@@ -106,15 +107,21 @@ def derive_satfung(jabatan):
 
 
 def _make_leaves(row_map):
-    """row_map: dict of canonical field -> (date_value, reason_value)."""
+    """row_map: dict of canonical field -> list of (date, reason[, return_date]).
+
+    `tanggal` = tanggal berangkat, `tanggal_kembali` = tanggal kembali bertugas
+    (boleh kosong). Format lama tanpa kolom kembali tetap didukung."""
     leaves = []
     for jenis, entries in row_map.items():
-        for tanggal_raw, alasan in entries:
+        for entry in entries:
+            tanggal_raw, alasan = entry[0], entry[1]
+            kembali_raw = entry[2] if len(entry) > 2 else None
             iso = _parse_date(tanggal_raw)
             if iso:
                 leaves.append({
                     "jenis": jenis,
                     "tanggal": iso,
+                    "tanggal_kembali": _parse_date(kembali_raw),
                     "alasan": _norm(alasan),
                     "source": "excel",
                 })
@@ -174,18 +181,29 @@ def _parse_template(rows, hdr_idx, year):
     c_jab = col("JABATAN")
     c_sat = col("SATFUNG", "SATKER", "UNIT")
 
-    # date/reason pairs
+    # (jenis, kolom berangkat, kolom kembali, kolom alasan).
+    # Nama kolom lama (mis. "IJIN 1") tetap dikenali sebagai tanggal berangkat.
     pairs = [
-        ("IZIN", ["IJIN 1", "IZIN 1", "IJIN", "IZIN"], ["ALASAN IJIN 1", "ALASAN IZIN 1", "ALASAN IZIN"]),
-        ("IZIN", ["IJIN 2", "IZIN 2"], ["ALASAN IJIN 2", "ALASAN IZIN 2"]),
-        ("IZIN", ["IJIN 3", "IZIN 3"], ["ALASAN IJIN 3", "ALASAN IZIN 3"]),
-        ("IZIN", ["IJIN 4", "IZIN 4"], ["ALASAN IJIN 4", "ALASAN IZIN 4"]),
-        ("EMERGENCY", ["IJIN EMERGENCY", "IZIN EMERGENCY", "EMERGENCY"], ["ALASAN EMERGENCY"]),
-        ("CUTI_TAHUNAN", ["CUTI TAHUNAN", "CUTI"], ["ALASAN CUTI TAHUNAN", "ALASAN CUTI"]),
-        ("CUTI_BEROBAT", ["CUTI BEROBAT"], ["ALASAN CUTI BEROBAT", "ALASAN BEROBAT"]),
-        ("CUTI_IBADAH_UMROH", ["CUTI IBADAH UMROH", "UMROH"], ["ALASAN UMROH", "ALASAN CUTI IBADAH UMROH"]),
-        ("CUTI_IBADAH_HAJI", ["CUTI IBADAH HAJI", "HAJI"], ["ALASAN HAJI", "ALASAN CUTI IBADAH HAJI"]),
-        ("CUTI_IBADAH_LAINNYA", ["CUTI IBADAH LAINNYA", "CUTI IBADAH"], ["ALASAN CUTI IBADAH LAINNYA", "ALASAN IBADAH"]),
+        ("IZIN", ["BERANGKAT IJIN 1", "BERANGKAT IZIN 1", "IJIN 1", "IZIN 1", "IJIN", "IZIN"],
+         ["KEMBALI IJIN 1", "KEMBALI IZIN 1"], ["ALASAN IJIN 1", "ALASAN IZIN 1", "ALASAN IZIN"]),
+        ("IZIN", ["BERANGKAT IJIN 2", "BERANGKAT IZIN 2", "IJIN 2", "IZIN 2"],
+         ["KEMBALI IJIN 2", "KEMBALI IZIN 2"], ["ALASAN IJIN 2", "ALASAN IZIN 2"]),
+        ("IZIN", ["BERANGKAT IJIN 3", "BERANGKAT IZIN 3", "IJIN 3", "IZIN 3"],
+         ["KEMBALI IJIN 3", "KEMBALI IZIN 3"], ["ALASAN IJIN 3", "ALASAN IZIN 3"]),
+        ("IZIN", ["BERANGKAT IJIN 4", "BERANGKAT IZIN 4", "IJIN 4", "IZIN 4"],
+         ["KEMBALI IJIN 4", "KEMBALI IZIN 4"], ["ALASAN IJIN 4", "ALASAN IZIN 4"]),
+        ("EMERGENCY", ["BERANGKAT EMERGENCY", "IJIN EMERGENCY", "IZIN EMERGENCY", "EMERGENCY"],
+         ["KEMBALI EMERGENCY"], ["ALASAN EMERGENCY"]),
+        ("CUTI_TAHUNAN", ["BERANGKAT CUTI TAHUNAN", "CUTI TAHUNAN", "CUTI"],
+         ["KEMBALI CUTI TAHUNAN"], ["ALASAN CUTI TAHUNAN", "ALASAN CUTI"]),
+        ("CUTI_BEROBAT", ["BERANGKAT CUTI BEROBAT", "CUTI BEROBAT"],
+         ["KEMBALI CUTI BEROBAT"], ["ALASAN CUTI BEROBAT", "ALASAN BEROBAT"]),
+        ("CUTI_IBADAH_UMROH", ["BERANGKAT UMROH", "CUTI IBADAH UMROH", "UMROH"],
+         ["KEMBALI UMROH"], ["ALASAN UMROH", "ALASAN CUTI IBADAH UMROH"]),
+        ("CUTI_IBADAH_HAJI", ["BERANGKAT HAJI", "CUTI IBADAH HAJI", "HAJI"],
+         ["KEMBALI HAJI"], ["ALASAN HAJI", "ALASAN CUTI IBADAH HAJI"]),
+        ("CUTI_IBADAH_LAINNYA", ["BERANGKAT CUTI IBADAH LAINNYA", "CUTI IBADAH LAINNYA", "CUTI IBADAH"],
+         ["KEMBALI CUTI IBADAH LAINNYA"], ["ALASAN CUTI IBADAH LAINNYA", "ALASAN IBADAH"]),
     ]
 
     out = []
@@ -194,19 +212,23 @@ def _parse_template(rows, hdr_idx, year):
         nama = _norm(r[c_nama]) if c_nama is not None else ""
         if not nama or nama.lower() == "nama":
             continue
+        if nama.upper().startswith("CONTOH NAMA"):
+            continue  # baris contoh di template
         pangkat = _norm(r[c_pangkat]) if c_pangkat is not None else ""
         if not pangkat and not (c_nrp is not None and _norm(r[c_nrp])):
             continue
         row_map = {}
-        for jenis, dcols, rcols in pairs:
+        for jenis, dcols, kcols, rcols in pairs:
             dc = next((idx[c] for c in dcols if c in idx), None)
+            kc = next((idx[c] for c in kcols if c in idx), None)
             rc = next((idx[c] for c in rcols if c in idx), None)
             if dc is None:
                 continue
             dv = r[dc]
+            kv = r[kc] if kc is not None else None
             rv = r[rc] if rc is not None else None
             if _parse_date(dv):
-                row_map.setdefault(jenis, []).append((dv, rv))
+                row_map.setdefault(jenis, []).append((dv, rv, kv))
         order += 1
         out.append({
             "nrp": _norm(r[c_nrp]) if c_nrp is not None else "",
@@ -317,17 +339,14 @@ def build_template(satfung_list=None):
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    headers = [
-        "No", "Nama", "Pangkat", "NRP/NIP", "Satfung", "Jabatan",
-        "IJIN 1", "ALASAN IJIN 1", "IJIN 2", "ALASAN IJIN 2",
-        "IJIN 3", "ALASAN IJIN 3", "IJIN 4", "ALASAN IJIN 4",
-        "IJIN EMERGENCY", "ALASAN EMERGENCY",
-        "CUTI TAHUNAN", "ALASAN CUTI TAHUNAN",
-        "CUTI BEROBAT", "ALASAN CUTI BEROBAT",
-        "CUTI IBADAH UMROH", "ALASAN UMROH",
-        "CUTI IBADAH HAJI", "ALASAN HAJI",
-        "CUTI IBADAH LAINNYA", "ALASAN CUTI IBADAH LAINNYA",
+    base = ["No", "Nama", "Pangkat", "NRP/NIP", "Satfung", "Jabatan"]
+    groups = [
+        "IJIN 1", "IJIN 2", "IJIN 3", "IJIN 4", "EMERGENCY",
+        "CUTI TAHUNAN", "CUTI BEROBAT", "UMROH", "HAJI", "CUTI IBADAH LAINNYA",
     ]
+    headers = list(base)
+    for g in groups:
+        headers += [f"BERANGKAT {g}", f"KEMBALI {g}", f"ALASAN {g}"]
 
     for year in (datetime.now().year, datetime.now().year + 1):
         ws = wb.create_sheet(title=f"TAHUN {year}")
@@ -335,24 +354,25 @@ def build_template(satfung_list=None):
         tcell = ws.cell(row=1, column=1, value=f"DATA IJIN CUTI PERSONIL POLRES MIMIKA {year}")
         tcell.font = title_font
         tcell.alignment = Alignment(horizontal="center", vertical="center")
-        ws.cell(row=2, column=1, value="Format tanggal: DD-MM-YYYY. Kolom ALASAN diisi manual. Satfung wajib diisi (contoh: BAG SDM, SAT LANTAS, POLSEK MIMIKA BARU).")
+        ws.cell(row=2, column=1, value="Format tanggal: DD-MM-YYYY. BERANGKAT = tanggal mulai izin/cuti, KEMBALI = tanggal kembali bertugas (boleh kosong), ALASAN diisi manual. Satfung wajib diisi (contoh: BAG SDM, SAT LANTAS, POLSEK MIMIKA BARU). Hapus baris contoh sebelum upload.")
         for c, h in enumerate(headers, start=1):
             cell = ws.cell(row=3, column=c, value=h)
             cell.fill = header_fill
             cell.font = header_font
             cell.alignment = center
             cell.border = border
-        # example row
-        example = ["1", "CONTOH NAMA, S.H.", "AIPTU", "88010123", "BAG SDM",
-                   "BANUM SUBBAG DALPERS BAG SDM", "05-01-2026", "Acara keluarga",
-                   "", "", "", "", "", "", "", "", "12-02-2026", "Cuti tahunan",
-                   "", "", "", "", "", "", "", ""]
-        for c, v in enumerate(example, start=1):
-            ws.cell(row=4, column=c, value=v).border = border
-        widths = [5, 30, 10, 12, 16, 30] + [16, 24] * 10
+        # example row (posisi kolom mengikuti urutan headers)
+        example = {"No": "1", "Nama": "CONTOH NAMA, S.H.", "Pangkat": "AIPTU", "NRP/NIP": "88010123",
+                   "Satfung": "BAG SDM", "Jabatan": "BANUM SUBBAG DALPERS BAG SDM",
+                   "BERANGKAT IJIN 1": "05-01-2026", "KEMBALI IJIN 1": "06-01-2026", "ALASAN IJIN 1": "Acara keluarga",
+                   "BERANGKAT CUTI TAHUNAN": "12-02-2026", "KEMBALI CUTI TAHUNAN": "20-02-2026",
+                   "ALASAN CUTI TAHUNAN": "Cuti tahunan"}
+        for c, h in enumerate(headers, start=1):
+            ws.cell(row=4, column=c, value=example.get(h, "")).border = border
+        widths = [5, 30, 10, 14, 18, 30] + [14, 14, 24] * len(groups)
         for i, w in enumerate(widths, start=1):
-            ws.column_dimensions[chr(64 + i) if i <= 26 else "A" + chr(64 + i - 26)].width = w
-        ws.freeze_panes = "A4"
+            ws.column_dimensions[get_column_letter(i)].width = w
+        ws.freeze_panes = "G4"
 
     # remove default sheet
     if "Sheet" in wb.sheetnames:
