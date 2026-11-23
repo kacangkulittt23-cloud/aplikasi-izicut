@@ -1,11 +1,12 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import * as DocumentPicker from "expo-document-picker";
-import * as Haptics from "expo-haptics";
+import { useQuery } from "@tanstack/react-query";
+import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
-import * as WebBrowser from "expo-web-browser";
-import React, { useEffect, useState } from "react";
+import * as Haptics from "expo-haptics";
+import React, { useState } from "react";
 import {
   ActivityIndicator,
+  FlatList,
   Pressable,
   ScrollView,
   Text,
@@ -14,382 +15,569 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { api } from "@/src/api/client";
+import { api, OnLeaveItem, Personnel } from "@/src/api/client";
 import { Icon } from "@/src/components/icon";
-import { Sheet } from "@/src/components/sheet";
-import { DatePickerField } from "@/src/components/date-picker";
 import { LEAVE_ORDER, metaFor } from "@/src/constants/leave";
-import { useToast } from "@/src/components/toast";
 import { useAuth } from "@/src/context/auth";
 import { makeStyles, useTheme } from "@/src/theme";
+import { formatDate, formatDateLong, initials } from "@/src/utils/format";
 
-export default function AdminHome() {
+const HERO =
+  "https://images.unsplash.com/photo-1741356474357-72188f76e801?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNDR8MHwxfHNlYXJjaHwxfHxibGFjayUyMGFuZCUyMGdvbGQlMjBkYXJrJTIwYWJzdHJhY3QlMjBsdXh1cnklMjB0ZXh0dXJlfGVufDB8fHx8MTc4ODg0MjQ0MXww&ixlib=rb-4.1.0&q=85";
+
+const ABS = { position: "absolute" as const, top: 0, left: 0, right: 0, bottom: 0 };
+
+export default function Dashboard() {
   const styles = useStyles();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { isAdmin, ready, username, logout } = useAuth();
-  const toast = useToast();
-  const qc = useQueryClient();
+  const { isAdmin } = useAuth();
 
-  const [addOpen, setAddOpen] = useState(false);
-  const [pwOpen, setPwOpen] = useState(false);
-  const [uploading, setUploading] = useState(false);
-
-  useEffect(() => {
-    if (ready && !isAdmin) router.replace("/admin/login");
-  }, [ready, isAdmin, router]);
+  const [q, setQ] = useState("");
+  const [year, setYear] = useState<number | null>(null);
+  const [satfung, setSatfung] = useState<string | null>(null);
+  const [jenis, setJenis] = useState<string | null>(null);
 
   const yearsQ = useQuery({ queryKey: ["years"], queryFn: () => api.years() });
-  const statsQ = useQuery({
-    queryKey: ["stats", "all-admin"],
-    queryFn: () => api.stats(),
+  const activeYear = year ?? yearsQ.data?.[0] ?? null;
+
+  const satfungQ = useQuery({
+    queryKey: ["satfung", activeYear],
+    queryFn: () => api.satfung(activeYear ?? undefined),
+    enabled: activeYear != null,
   });
 
-  const refreshAll = () => {
-    qc.invalidateQueries({ queryKey: ["years"] });
-    qc.invalidateQueries({ queryKey: ["satfung"] });
-    qc.invalidateQueries({ queryKey: ["stats"] });
-    qc.invalidateQueries({ queryKey: ["personnel"] });
+  const statsQ = useQuery({
+    queryKey: ["stats", activeYear],
+    queryFn: () => api.stats(activeYear ?? undefined),
+    enabled: activeYear != null,
+  });
+
+  const browsing = q.trim().length > 0 || !!satfung || !!jenis;
+
+  const personnelQ = useQuery({
+    queryKey: ["personnel", activeYear, satfung, jenis, q.trim()],
+    queryFn: () =>
+      api.listPersonnel({
+        tahun: activeYear ?? undefined,
+        satfung: satfung ?? undefined,
+        jenis: jenis ?? undefined,
+        q: q.trim() || undefined,
+      }),
+    enabled: activeYear != null && browsing,
+  });
+
+  const openProfile = (id: string) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    router.push(`/personnel/${id}`);
   };
 
-  const upload = async () => {
-    try {
-      const picked = await DocumentPicker.getDocumentAsync({
-        type: [
-          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          "application/vnd.ms-excel",
-        ],
-        copyToCacheDirectory: true,
-        multiple: false,
-      });
-      if (picked.canceled) return;
-      const asset = picked.assets[0];
-      setUploading(true);
-      const res = await api.importExcel(asset.uri, asset.name, asset.mimeType, (asset as any).file);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      refreshAll();
-      toast(`Berhasil: ${res.ditambahkan} ditambahkan, ${res.diperbarui} diperbarui (Tahun ${res.tahun.join(", ")})`, "success");
-    } catch (e: any) {
-      toast(e.message || "Gagal upload", "error");
-    } finally {
-      setUploading(false);
-    }
-  };
+  const renderItem = ({ item }: { item: Personnel }) => (
+    <Pressable
+      testID={`personnel-row-${item.id}`}
+      onPress={() => openProfile(item.id)}
+      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+    >
+      <View style={styles.avatar}>
+        <Text style={styles.avatarText}>{initials(item.nama)}</Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.rowName} numberOfLines={1}>{item.nama}</Text>
+        <Text style={styles.rowSub} numberOfLines={1}>
+          {item.pangkat}{item.nrp ? ` • ${item.nrp}` : ""}
+        </Text>
+        <Text style={styles.rowJab} numberOfLines={1}>{item.jabatan || item.satfung}</Text>
+      </View>
+      <View style={styles.rowRight}>
+        <View style={styles.countPill}>
+          <Text style={styles.countText}>{item.leave_count ?? item.leaves?.length ?? 0}</Text>
+        </View>
+        <Icon name="CaretRight" size={18} color={colors.muted} />
+      </View>
+    </Pressable>
+  );
 
-  const downloadTemplate = async () => {
-    try {
-      await WebBrowser.openBrowserAsync(api.templateUrl());
-    } catch {
-      toast("Tidak dapat membuka template", "error");
-    }
-  };
+  const Header = (
+    <View>
+      <View style={styles.hero}>
+        <Image source={{ uri: HERO }} style={ABS} contentFit="cover" transition={300} />
+        <LinearGradient
+          colors={["rgba(5,5,5,0.35)", "rgba(5,5,5,0.75)", "#050505"]}
+          locations={[0, 0.55, 1]}
+          style={ABS}
+        />
+        <View style={[styles.heroContent, { paddingTop: insets.top + 12 }]}>
+          <View style={styles.heroTop}>
+            <View style={styles.badge}>
+              <Icon name="ShieldStar" size={26} color={colors.brandPrimary} weight="fill" />
+            </View>
+            <Pressable
+              testID="admin-entry-button"
+              onPress={() => router.push(isAdmin ? "/admin" : "/admin/login")}
+              style={({ pressed }) => [styles.adminBtn, pressed && styles.pressed]}
+            >
+              <Icon name={isAdmin ? "ShieldStar" : "Lock"} size={16} color={colors.brandPrimary} />
+              <Text style={styles.adminBtnText}>Admin</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.brandTitle}>E-IZICUT</Text>
+          <Text style={styles.brandSub}>Watpers Bag SDM • Polres Mimika</Text>
 
-  if (!ready || !isAdmin) {
-    return <View style={[styles.container, styles.center]}><ActivityIndicator color={colors.brandPrimary} /></View>;
-  }
-
-  return (
-    <View style={styles.container}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <Pressable testID="back-button" onPress={() => router.back()} hitSlop={10} style={styles.headerBtn}>
-          <Icon name="ArrowLeft" size={22} color={colors.onSurface} />
-        </Pressable>
-        <Text style={styles.headerTitle}>PANEL ADMIN</Text>
-        <Pressable
-          testID="logout-button"
-          onPress={async () => { await logout(); router.replace("/"); }}
-          hitSlop={10}
-          style={styles.headerBtn}
-        >
-          <Icon name="SignOut" size={20} color={colors.onError} />
-        </Pressable>
+          <View style={styles.searchWrap} testID="search-bar">
+            <Icon name="MagnifyingGlass" size={20} color={colors.brandPrimary} />
+            <TextInput
+              testID="search-input"
+              value={q}
+              onChangeText={setQ}
+              placeholder="Cari nama atau NRP…"
+              placeholderTextColor={colors.muted}
+              style={styles.searchInput}
+              returnKeyType="search"
+            />
+            {q.length > 0 ? (
+              <Pressable testID="search-clear" onPress={() => setQ("")} hitSlop={10}>
+                <Icon name="X" size={18} color={colors.muted} />
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: insets.bottom + 32 }} showsVerticalScrollIndicator={false}>
-        <View style={styles.welcomeCard}>
-          <Icon name="ShieldStar" size={26} color={colors.brandPrimary} weight="fill" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.welcomeName}>Selamat datang, {username}</Text>
-            <Text style={styles.welcomeSub}>
-              {statsQ.data ? `${statsQ.data.total_personil} personil • ${statsQ.data.total_pengajuan} catatan izin/cuti` : "Memuat…"}
-            </Text>
-          </View>
-        </View>
-
-        {/* Upload */}
-        <Text style={styles.sectionTitle}>DATABASE EXCEL</Text>
-        <Pressable testID="upload-excel-button" onPress={upload} disabled={uploading} style={styles.uploadCard}>
-          {uploading ? (
-            <ActivityIndicator color={colors.brandPrimary} />
-          ) : (
-            <Icon name="UploadSimple" size={34} color={colors.brandPrimary} weight="bold" />
-          )}
-          <Text style={styles.uploadTitle}>{uploading ? "Mengunggah & memproses…" : "Upload File Excel"}</Text>
-          <Text style={styles.uploadHint}>
-            Data digabung berdasarkan NRP & tahun. Sheet per tahun (mis. TAHUN 2025, TAHUN 2026).
-          </Text>
-        </Pressable>
-
-        <Pressable testID="download-template-button" onPress={downloadTemplate} style={styles.templateBtn}>
-          <Icon name="DownloadSimple" size={18} color={colors.brandPrimary} />
-          <Text style={styles.templateText}>Unduh Template Excel (dengan kolom Alasan)</Text>
-        </Pressable>
-
-        {/* Manage */}
-        <Text style={styles.sectionTitle}>KELOLA PERSONIL</Text>
-        <Pressable testID="add-personnel-button" onPress={() => setAddOpen(true)} style={styles.actionRow}>
-          <View style={styles.actionIcon}><Icon name="Plus" size={18} color={colors.brandPrimary} weight="bold" /></View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.actionTitle}>Tambah Personil Baru</Text>
-            <Text style={styles.actionSub}>Input manual satu personil</Text>
-          </View>
-          <Icon name="CaretRight" size={18} color={colors.muted} />
-        </Pressable>
-        <Pressable testID="search-personnel-button" onPress={() => router.push("/")} style={styles.actionRow}>
-          <View style={styles.actionIcon}><Icon name="MagnifyingGlass" size={18} color={colors.brandPrimary} /></View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.actionTitle}>Cari & Edit Personil</Text>
-            <Text style={styles.actionSub}>Buka profil untuk kelola izin / cuti</Text>
-          </View>
-          <Icon name="CaretRight" size={18} color={colors.muted} />
-        </Pressable>
-
-        {/* Laporan & Keamanan */}
-        <Text style={styles.sectionTitle}>LAPORAN & KEAMANAN</Text>
-        <Pressable testID="admin-rekap-button" onPress={() => router.push("/rekap")} style={styles.actionRow}>
-          <View style={styles.actionIcon}><Icon name="ChartBar" size={18} color={colors.brandPrimary} weight="fill" /></View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.actionTitle}>Rekap Satfung</Text>
-            <Text style={styles.actionSub}>Ringkasan bulanan & peringkat izin/cuti</Text>
-          </View>
-          <Icon name="CaretRight" size={18} color={colors.muted} />
-        </Pressable>
-        <Pressable testID="change-password-button" onPress={() => setPwOpen(true)} style={styles.actionRow}>
-          <View style={styles.actionIcon}><Icon name="Key" size={18} color={colors.brandPrimary} /></View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.actionTitle}>Ganti Password</Text>
-            <Text style={styles.actionSub}>Ubah kata sandi admin Anda</Text>
-          </View>
-          <Icon name="CaretRight" size={18} color={colors.muted} />
-        </Pressable>
-
-        <View style={styles.tip}>
-          <Icon name="Info" size={16} color={colors.muted} />
-          <Text style={styles.tipText}>
-            Tips: Untuk update rutin, cukup upload file Excel terbaru. Data lama otomatis diperbarui, catatan yang Anda tambahkan manual tetap tersimpan.
-          </Text>
-        </View>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipRow}
+        style={styles.chipScroller}
+      >
+        {(yearsQ.data ?? []).map((y) => {
+          const active = activeYear === y;
+          return (
+            <Pressable
+              key={y}
+              testID={`year-chip-${y}`}
+              onPress={() => {
+                Haptics.selectionAsync().catch(() => {});
+                setYear(y);
+                setSatfung(null);
+                setJenis(null);
+              }}
+              style={[styles.chip, active && styles.chipActive]}
+            >
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>Tahun {y}</Text>
+            </Pressable>
+          );
+        })}
       </ScrollView>
 
-      {addOpen ? (
-        <AddPersonnel
-          defaultYear={Math.max(yearsQ.data?.[0] ?? 0, new Date().getFullYear())}
-          onClose={() => setAddOpen(false)}
-          onCreated={(id) => { setAddOpen(false); refreshAll(); router.push(`/personnel/${id}`); }}
-        />
-      ) : null}
-      {pwOpen ? <ChangePassword onClose={() => setPwOpen(false)} /> : null}
-    </View>
-  );
-}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipRow}
+        style={styles.chipScroller}
+      >
+        <Pressable
+          testID="satfung-chip-all"
+          onPress={() => { Haptics.selectionAsync().catch(() => {}); setSatfung(null); }}
+          style={[styles.chip, !satfung && styles.chipActive]}
+        >
+          <Text style={[styles.chipText, !satfung && styles.chipTextActive]}>Semua Satfung</Text>
+        </Pressable>
+        {(satfungQ.data ?? []).map((s) => {
+          const active = satfung === s.satfung;
+          return (
+            <Pressable
+              key={s.satfung}
+              testID={`satfung-chip-${s.satfung}`}
+              onPress={() => { Haptics.selectionAsync().catch(() => {}); setSatfung(active ? null : s.satfung); }}
+              style={[styles.chip, active && styles.chipActive]}
+            >
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{s.satfung}</Text>
+              <View style={[styles.chipCount, active && styles.chipCountActive]}>
+                <Text style={[styles.chipCountText, active && styles.chipCountTextActive]}>{s.count}</Text>
+              </View>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
 
-function ChangePassword({ onClose }: { onClose: () => void }) {
-  const styles = useStyles();
-  const { colors } = useTheme();
-  const toast = useToast();
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [confirm, setConfirm] = useState("");
-
-  const mut = useMutation({
-    mutationFn: () => {
-      if (next.length < 6) throw new Error("Password baru minimal 6 karakter");
-      if (next !== confirm) throw new Error("Konfirmasi password tidak cocok");
-      return api.changePassword(current, next);
-    },
-    onSuccess: () => {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      toast("Password berhasil diubah", "success");
-      onClose();
-    },
-    onError: (e: any) => toast(e.message, "error"),
-  });
-
-  return (
-    <Sheet visible onClose={onClose} title="Ganti Password" testID="change-password-sheet">
-      <Field label="Password Lama" value={current} onChange={setCurrent} testID="pw-current" secure />
-      <Field label="Password Baru (min. 6 karakter)" value={next} onChange={setNext} testID="pw-new" secure />
-      <Field label="Ulangi Password Baru" value={confirm} onChange={setConfirm} testID="pw-confirm" secure />
-      <Pressable testID="save-change-password" onPress={() => mut.mutate()} style={styles.saveBtn} disabled={mut.isPending}>
-        {mut.isPending ? <ActivityIndicator color={colors.onBrandPrimary} /> : <Text style={styles.saveText}>Simpan Password Baru</Text>}
-      </Pressable>
-    </Sheet>
-  );
-}
-
-function AddPersonnel({
-  defaultYear, onClose, onCreated,
-}: { defaultYear: number; onClose: () => void; onCreated: (id: string) => void }) {
-  const styles = useStyles();
-  const { colors } = useTheme();
-  const toast = useToast();
-  const [nama, setNama] = useState("");
-  const [pangkat, setPangkat] = useState("");
-  const [nrp, setNrp] = useState("");
-  const [jabatan, setJabatan] = useState("");
-  const [satfung, setSatfung] = useState("");
-  const [tahun, setTahun] = useState(String(defaultYear));
-  // optional first leave
-  const [jenis, setJenis] = useState<string | null>(null);
-  const [tanggal, setTanggal] = useState("");
-  const [alasan, setAlasan] = useState("");
-
-  const mut = useMutation({
-    mutationFn: async () => {
-      if (!nama.trim()) throw new Error("Nama wajib diisi");
-      const yr = Number(tahun);
-      if (!yr || yr < 2000 || yr > 2100) throw new Error("Tahun tidak valid (mis. 2027)");
-      const p: any = await api.createPersonnel({
-        nama: nama.trim(), pangkat, nrp, jabatan,
-        satfung: satfung.trim() || "LAINNYA",
-        tahun: yr,
-      });
-      if (jenis && tanggal) {
-        await api.addLeave(p.id, { jenis, tanggal, alasan });
-      }
-      return p;
-    },
-    onSuccess: (p: any) => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}); onCreated(p.id); },
-    onError: (e: any) => toast(e.message, "error"),
-  });
-
-  return (
-    <Sheet visible onClose={onClose} title="Tambah Personil" testID="add-personnel-sheet">
-      <Field label="Nama Lengkap" value={nama} onChange={setNama} testID="add-nama" />
-      <Field label="Pangkat" value={pangkat} onChange={setPangkat} testID="add-pangkat" />
-      <Field label="NRP / NIP" value={nrp} onChange={setNrp} testID="add-nrp" keyboard="numbers-and-punctuation" />
-      <Field label="Jabatan" value={jabatan} onChange={setJabatan} testID="add-jabatan" />
-      <Field label="Satfung (mis. BAG SDM)" value={satfung} onChange={setSatfung} testID="add-satfung" />
-      <Field label="Tahun (bisa ketik tahun baru, mis. 2027)" value={tahun} onChange={setTahun} testID="add-tahun" keyboard="number-pad" />
-
-      <View style={styles.optDivider}>
-        <Text style={styles.optTitle}>Izin / Cuti (opsional)</Text>
-        <Text style={styles.optHint}>Isi bila anggota ini sedang izin/cuti sekarang</Text>
-      </View>
-      <View style={styles.jenisWrap}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.chipRow}
+        style={styles.chipScroller}
+      >
+        <Pressable
+          testID="jenis-chip-all"
+          onPress={() => { Haptics.selectionAsync().catch(() => {}); setJenis(null); }}
+          style={[styles.chip, !jenis && styles.chipActive]}
+        >
+          <Icon name="FunnelSimple" size={14} color={!jenis ? colors.onBrandTertiary : colors.muted} />
+          <Text style={[styles.chipText, !jenis && styles.chipTextActive]}>Semua Jenis</Text>
+        </Pressable>
         {LEAVE_ORDER.map((k) => {
           const meta = metaFor(k);
           const active = jenis === k;
           return (
             <Pressable
               key={k}
-              testID={`add-jenis-${k}`}
-              onPress={() => setJenis(active ? null : k)}
-              style={[styles.jenisChip, active && { backgroundColor: colors.brandTertiary, borderColor: colors.brandPrimary }]}
+              testID={`jenis-chip-${k}`}
+              onPress={() => { Haptics.selectionAsync().catch(() => {}); setJenis(active ? null : k); }}
+              style={[styles.chip, active && styles.chipActive]}
             >
               <Icon name={meta.icon} size={14} color={active ? colors.brandPrimary : colors.muted} weight={active ? "fill" : "regular"} />
-              <Text style={[styles.jenisText, active && { color: colors.onBrandTertiary }]}>{meta.short}</Text>
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>{meta.short}</Text>
             </Pressable>
           );
         })}
-      </View>
-      {jenis ? (
-        <>
-          <Text style={styles.fieldLabel}>Tanggal</Text>
-          <DatePickerField testID="add-leave-date" value={tanggal} onChange={setTanggal} placeholder="Ketuk untuk pilih tanggal" />
-          <View style={{ height: 12 }} />
-          <Field label="Alasan / Keterangan" value={alasan} onChange={setAlasan} testID="add-leave-alasan" />
-        </>
-      ) : null}
+      </ScrollView>
 
-      <Pressable testID="save-add-personnel" onPress={() => mut.mutate()} style={styles.saveBtn} disabled={mut.isPending}>
-        {mut.isPending ? <ActivityIndicator color={colors.onBrandPrimary} /> : <Text style={styles.saveText}>Simpan</Text>}
-      </Pressable>
-    </Sheet>
+      {!browsing ? (
+        <DashboardBody
+          stats={statsQ.data}
+          loading={statsQ.isLoading}
+          onOpen={openProfile}
+          onRekap={() => router.push(`/rekap?tahun=${activeYear ?? ""}`)}
+        />
+      ) : (
+        <View style={styles.listHint}>
+          <Text style={styles.listHintText}>
+            {personnelQ.isFetching ? "Mencari…" : `${personnelQ.data?.length ?? 0} personil ditemukan`}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+
+  return (
+    <View style={styles.container}>
+      <FlatList
+        data={browsing ? personnelQ.data ?? [] : []}
+        keyExtractor={(it) => it.id}
+        renderItem={renderItem}
+        ListHeaderComponent={Header}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        contentContainerStyle={{ paddingBottom: insets.bottom + 32 }}
+        ListEmptyComponent={
+          browsing ? (
+            personnelQ.isLoading ? (
+              <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>
+            ) : (
+              <View style={styles.center}>
+                <Icon name="MagnifyingGlass" size={40} color={colors.muted} />
+                <Text style={styles.emptyText}>Tidak ada personil ditemukan</Text>
+              </View>
+            )
+          ) : null
+        }
+      />
+    </View>
   );
 }
 
-function Field({
-  label, value, onChange, testID, keyboard, secure,
-}: { label: string; value: string; onChange: (s: string) => void; testID?: string; keyboard?: any; secure?: boolean }) {
+function DashboardBody({
+  stats,
+  loading,
+  onOpen,
+  onRekap,
+}: {
+  stats?: import("@/src/api/client").Stats;
+  loading: boolean;
+  onOpen: (id: string) => void;
+  onRekap: () => void;
+}) {
   const styles = useStyles();
   const { colors } = useTheme();
+  if (loading || !stats) {
+    return <View style={styles.center}><ActivityIndicator color={colors.brandPrimary} /></View>;
+  }
   return (
-    <>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        testID={testID}
-        value={value}
-        onChangeText={onChange}
-        placeholderTextColor={colors.muted}
-        keyboardType={keyboard}
-        secureTextEntry={secure}
-        autoCapitalize="none"
-        style={styles.input}
-      />
-    </>
+    <View style={styles.dash}>
+      <OnLeaveSection onOpen={onOpen} />
+
+      <Pressable testID="rekap-button" onPress={onRekap} style={({ pressed }) => [styles.rekapBtn, pressed && styles.pressed]}>
+        <View style={styles.rekapIcon}><Icon name="ChartBar" size={20} color={colors.brandPrimary} weight="fill" /></View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.rekapTitle}>Rekap Satfung</Text>
+          <Text style={styles.rekapSub}>Ringkasan bulanan & satfung paling sering izin/cuti</Text>
+        </View>
+        <Icon name="CaretRight" size={18} color={colors.brandPrimary} />
+      </Pressable>
+
+      <View style={styles.bentoRow}>
+        <View style={[styles.bento, styles.bentoGold]} testID="stat-total-personil">
+          <Icon name="Users" size={22} color={colors.onBrandPrimary} weight="fill" />
+          <Text style={styles.bentoNumGold}>{stats.total_personil}</Text>
+          <Text style={styles.bentoLabelGold}>Total Personil</Text>
+        </View>
+        <View style={styles.bentoCol}>
+          <View style={styles.bentoSmall} testID="stat-satfung">
+            <Text style={styles.bentoNum}>{stats.total_satfung}</Text>
+            <Text style={styles.bentoLabel}>Satfung</Text>
+          </View>
+          <View style={styles.bentoSmall} testID="stat-pengajuan">
+            <Text style={styles.bentoNum}>{stats.total_pengajuan}</Text>
+            <Text style={styles.bentoLabel}>Total Izin & Cuti</Text>
+          </View>
+        </View>
+      </View>
+
+      <View style={styles.typeGrid}>
+        {stats.per_type.map((t) => {
+          const meta = metaFor(t.key);
+          const accent = colors[meta.accent];
+          return (
+            <View key={t.key} style={styles.typeChip}>
+              <Icon name={meta.icon} size={18} color={accent} weight="fill" />
+              <Text style={styles.typeCount}>{t.count}</Text>
+              <Text style={styles.typeLabel} numberOfLines={1}>{meta.short}</Text>
+            </View>
+          );
+        })}
+      </View>
+
+      <Text style={styles.sectionTitle}>AKTIVITAS TERBARU</Text>
+      {stats.recent.length === 0 ? (
+        <View style={styles.center}>
+          <Icon name="ClipboardText" size={36} color={colors.muted} />
+          <Text style={styles.emptyText}>Belum ada catatan izin/cuti</Text>
+        </View>
+      ) : (
+        stats.recent.map((r, i) => {
+          const meta = metaFor(r.jenis);
+          const accent = colors[meta.accent];
+          return (
+            <Pressable
+              key={`${r.personnel_id}-${i}`}
+              testID={`recent-${i}`}
+              onPress={() => onOpen(r.personnel_id)}
+              style={({ pressed }) => [styles.recentCard, { borderLeftColor: accent }, pressed && styles.pressed]}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.recentName} numberOfLines={1}>{r.nama}</Text>
+                <Text style={styles.recentMeta} numberOfLines={1}>{meta.label} • {r.satfung}</Text>
+              </View>
+              <Text style={[styles.recentDate, { color: accent }]}>{formatDate(r.tanggal)}</Text>
+            </Pressable>
+          );
+        })
+      )}
+    </View>
+  );
+}
+
+const PREVIEW_COUNT = 5;
+
+function OnLeaveSection({ onOpen }: { onOpen: (id: string) => void }) {
+  const styles = useStyles();
+  const { colors } = useTheme();
+  const q = useQuery({
+    queryKey: ["on-leave"],
+    queryFn: () => api.onLeave(),
+    refetchInterval: 5 * 60 * 1000,
+  });
+  const [showAll, setShowAll] = useState<Record<string, boolean>>({});
+
+  if (q.isLoading) {
+    return <View style={styles.olLoading}><ActivityIndicator color={colors.brandPrimary} /></View>;
+  }
+  if (q.isError || !q.data) {
+    return (
+      <View style={styles.olEmpty}>
+        <Text style={styles.olEmptyText}>Data izin/cuti hari ini belum bisa dimuat.</Text>
+      </View>
+    );
+  }
+  const d = q.data;
+
+  const sisaText = (it: OnLeaveItem) => {
+    if (it.sisa_hari == null) return "Kembali: belum diisi";
+    if (it.sisa_hari === 1) return "Kembali besok";
+    return `Sisa ${it.sisa_hari} hari`;
+  };
+  const akanText = (it: OnLeaveItem) =>
+    it.berangkat_dalam === 1 ? "Berangkat besok" : `${it.berangkat_dalam} hari lagi`;
+
+  const renderCard = (it: OnLeaveItem, badge: string, keyPrefix: string, key: string) => {
+    const meta = metaFor(it.jenis);
+    const accent = colors[meta.accent];
+    return (
+      <Pressable
+        key={key}
+        testID={`${keyPrefix}-${it.personnel_id}`}
+        onPress={() => onOpen(it.personnel_id)}
+        style={({ pressed }) => [styles.olCard, { borderLeftColor: accent }, pressed && styles.pressed]}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={styles.olName} numberOfLines={1}>{it.pangkat ? `${it.pangkat} ` : ""}{it.nama}</Text>
+          <Text style={styles.olMeta} numberOfLines={1}>{it.label} • {it.satfung}</Text>
+          <Text style={styles.olDates}>
+            Berangkat {formatDate(it.tanggal)}
+            {it.tanggal_kembali ? `  •  Kembali ${formatDate(it.tanggal_kembali)}` : ""}
+          </Text>
+          {it.alasan ? <Text style={styles.olReason} numberOfLines={1}>{it.alasan}</Text> : null}
+        </View>
+        <View style={[styles.olBadge, { borderColor: accent }]}>
+          <Text style={[styles.olBadgeText, { color: accent }]}>{badge}</Text>
+        </View>
+      </Pressable>
+    );
+  };
+
+  const renderGroup = (
+    id: string, title: string, items: OnLeaveItem[], badge: (it: OnLeaveItem) => string,
+  ) => {
+    if (items.length === 0) return null;
+    const open = !!showAll[id];
+    const shown = open ? items : items.slice(0, PREVIEW_COUNT);
+    return (
+      <View key={id} style={{ marginBottom: 8 }}>
+        <View style={styles.olHead}>
+          <Text style={styles.sectionTitle}>{title}</Text>
+          <View style={styles.olCount}><Text style={styles.olCountText}>{items.length}</Text></View>
+        </View>
+        {shown.map((it, i) => renderCard(it, badge(it), id, `${id}-${it.personnel_id}-${it.tanggal}-${i}`))}
+        {items.length > PREVIEW_COUNT ? (
+          <Pressable testID={`${id}-toggle`} onPress={() => setShowAll({ ...showAll, [id]: !open })} style={styles.olMore}>
+            <Text style={styles.olMoreText}>{open ? "Tampilkan lebih sedikit" : `Tampilkan semua (${items.length})`}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  };
+
+  const none = d.sedang.length === 0 && d.kembali_hari_ini.length === 0 && d.akan.length === 0;
+
+  return (
+    <View testID="on-leave-section" style={{ marginBottom: 12 }}>
+      <Text style={styles.olToday}>Hari ini • {formatDateLong(d.today)}</Text>
+      {none ? (
+        <View style={styles.olEmpty}>
+          <Icon name="CheckCircle" size={28} color={colors.brandPrimary} />
+          <Text style={styles.olEmptyText}>Tidak ada personil yang sedang izin/cuti atau akan berangkat dalam {d.akan_hari} hari ke depan.</Text>
+        </View>
+      ) : null}
+      {renderGroup("sedang", "SEDANG IZIN / CUTI", d.sedang, sisaText)}
+      {renderGroup("kembali", "KEMBALI HARI INI", d.kembali_hari_ini, () => "Kembali hari ini")}
+      {renderGroup("akan", `AKAN BERANGKAT (${d.akan_hari} HARI)`, d.akan, akanText)}
+    </View>
   );
 }
 
 const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.surface },
-  center: { alignItems: "center", justifyContent: "center" },
-  header: {
-    flexDirection: "row", alignItems: "center", justifyContent: "space-between",
-    paddingHorizontal: 12, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: colors.divider,
+  center: { alignItems: "center", justifyContent: "center", paddingVertical: 48, gap: 12 },
+  emptyText: { color: colors.muted, fontFamily: "DMSans", fontSize: 14 },
+  pressed: { opacity: 0.7 },
+
+  hero: { height: 260, backgroundColor: colors.surface },
+  heroContent: { flex: 1, paddingHorizontal: 20, paddingBottom: 16, justifyContent: "flex-end" },
+  heroTop: { position: "absolute", top: 0, left: 20, right: 20, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  badge: {
+    width: 46, height: 46, borderRadius: 12, alignItems: "center", justifyContent: "center",
+    backgroundColor: "rgba(212,175,55,0.12)", borderWidth: 1, borderColor: colors.brandPrimary,
   },
-  headerBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
-  headerTitle: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 18, letterSpacing: 1.5 },
-
-  welcomeCard: {
-    flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: colors.surfaceSecondary,
-    borderRadius: 14, borderWidth: 1, borderColor: colors.border, padding: 16, marginBottom: 8,
-  },
-  welcomeName: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 18 },
-  welcomeSub: { color: colors.muted, fontFamily: "DMSans", fontSize: 13, marginTop: 2 },
-
-  sectionTitle: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 16, letterSpacing: 1.5, marginTop: 22, marginBottom: 12 },
-
-  uploadCard: {
-    alignItems: "center", gap: 8, backgroundColor: "rgba(212,175,55,0.06)",
-    borderRadius: 16, borderWidth: 2, borderColor: colors.brandPrimary, borderStyle: "dashed", padding: 24,
-  },
-  uploadTitle: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 20, letterSpacing: 0.5 },
-  uploadHint: { color: colors.muted, fontFamily: "DMSans", fontSize: 12, textAlign: "center", lineHeight: 18 },
-
-  templateBtn: {
-    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8,
-    marginTop: 12, paddingVertical: 12, borderRadius: 12, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceSecondary,
-  },
-  templateText: { color: colors.brandPrimary, fontFamily: "DMSans", fontSize: 14, fontWeight: "600" },
-
-  actionRow: {
-    flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: colors.surfaceSecondary,
-    borderRadius: 12, borderWidth: 1, borderColor: colors.border, padding: 14, marginBottom: 10,
-  },
-  actionIcon: { width: 38, height: 38, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.brandPrimary },
-  actionTitle: { color: colors.onSurface, fontFamily: "DMSans", fontSize: 15, fontWeight: "700" },
-  actionSub: { color: colors.muted, fontFamily: "DMSans", fontSize: 12, marginTop: 1 },
-
-  tip: { flexDirection: "row", gap: 10, marginTop: 20, backgroundColor: colors.surfaceTertiary, borderRadius: 12, padding: 14 },
-  tipText: { color: colors.onSurfaceTertiary, fontFamily: "DMSans", fontSize: 12, lineHeight: 18, flex: 1 },
-
-  fieldLabel: { color: colors.onSurfaceSecondary, fontFamily: "DMSans", fontSize: 13, fontWeight: "600", marginBottom: 8, marginTop: 6 },
-  input: {
-    backgroundColor: colors.surfaceTertiary, borderRadius: 10, borderWidth: 1, borderColor: colors.border,
-    color: colors.onSurface, fontFamily: "DMSans", fontSize: 15, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12,
-  },
-  saveBtn: { backgroundColor: colors.brandPrimary, height: 52, borderRadius: 12, alignItems: "center", justifyContent: "center", marginTop: 12 },
-  saveText: { color: colors.onBrandPrimary, fontFamily: "DMSans", fontSize: 16, fontWeight: "700" },
-
-  optDivider: { marginTop: 10, marginBottom: 6, borderTopWidth: 1, borderTopColor: colors.divider, paddingTop: 14 },
-  optTitle: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 16, letterSpacing: 0.5 },
-  optHint: { color: colors.muted, fontFamily: "DMSans", fontSize: 12, marginTop: 2 },
-  jenisWrap: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 12 },
-  jenisChip: {
+  adminBtn: {
     flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12, paddingVertical: 8,
-    borderRadius: 999, backgroundColor: colors.surfaceTertiary, borderWidth: 1, borderColor: colors.border,
+    borderRadius: 999, borderWidth: 1, borderColor: colors.brandPrimary, backgroundColor: "rgba(212,175,55,0.10)",
   },
-  jenisText: { color: colors.onSurfaceTertiary, fontFamily: "DMSans", fontSize: 12, fontWeight: "600" },
+  adminBtnText: { color: colors.brandPrimary, fontFamily: "DMSans", fontSize: 13, fontWeight: "600" },
+  brandTitle: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 40, letterSpacing: 2, marginBottom: 2 },
+  brandSub: { color: colors.brandPrimary, fontFamily: "DMSans", fontSize: 13, letterSpacing: 0.5, marginBottom: 16 },
+
+  searchWrap: {
+    flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.surfaceTertiary,
+    borderRadius: 12, borderWidth: 1, borderColor: colors.border, paddingHorizontal: 14, height: 52,
+  },
+  searchInput: { flex: 1, color: colors.onSurface, fontFamily: "DMSans", fontSize: 16, height: "100%" },
+
+  chipScroller: { backgroundColor: colors.surface },
+  chipRow: { paddingHorizontal: 16, paddingVertical: 8, gap: 8, flexDirection: "row" },
+  chip: {
+    flexShrink: 0, height: 36, flexDirection: "row", alignItems: "center", gap: 6,
+    paddingHorizontal: 14, borderRadius: 999, backgroundColor: colors.surfaceSecondary,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  chipActive: { backgroundColor: colors.brandTertiary, borderColor: colors.brandPrimary },
+  chipText: { color: colors.onSurfaceTertiary, fontFamily: "DMSans", fontSize: 13, fontWeight: "600" },
+  chipTextActive: { color: colors.onBrandTertiary },
+  chipCount: { minWidth: 20, paddingHorizontal: 6, height: 18, borderRadius: 9, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center" },
+  chipCountActive: { backgroundColor: colors.brandPrimary },
+  chipCountText: { color: colors.muted, fontFamily: "DMSans", fontSize: 11, fontWeight: "700" },
+  chipCountTextActive: { color: colors.onBrandPrimary },
+
+  listHint: { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 },
+  listHintText: { color: colors.muted, fontFamily: "DMSans", fontSize: 13 },
+
+  dash: { paddingHorizontal: 16, paddingTop: 8 },
+  rekapBtn: {
+    flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 16,
+    backgroundColor: "rgba(212,175,55,0.06)", borderRadius: 14, borderWidth: 1, borderColor: colors.brandPrimary, padding: 14,
+  },
+  rekapIcon: { width: 40, height: 40, borderRadius: 10, alignItems: "center", justifyContent: "center", backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.brandPrimary },
+  rekapTitle: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 18, letterSpacing: 0.5 },
+  rekapSub: { color: colors.muted, fontFamily: "DMSans", fontSize: 12, marginTop: 1 },
+  bentoRow: { flexDirection: "row", gap: 12, marginBottom: 12 },
+  bento: { flex: 1, borderRadius: 16, padding: 16, justifyContent: "space-between", minHeight: 132 },
+  bentoGold: { backgroundColor: colors.brandPrimary },
+  bentoNumGold: { color: colors.onBrandPrimary, fontFamily: "Oswald", fontSize: 40, marginTop: 8 },
+  bentoLabelGold: { color: colors.onBrandPrimary, fontFamily: "DMSans", fontSize: 13, fontWeight: "600", opacity: 0.85 },
+  bentoCol: { flex: 1, gap: 12 },
+  bentoSmall: { flex: 1, backgroundColor: colors.surfaceSecondary, borderRadius: 16, padding: 16, borderWidth: 1, borderColor: colors.border, justifyContent: "center" },
+  bentoNum: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 26 },
+  bentoLabel: { color: colors.muted, fontFamily: "DMSans", fontSize: 12 },
+
+  typeGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 20 },
+  typeChip: {
+    flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.surfaceSecondary,
+    borderWidth: 1, borderColor: colors.border, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 8,
+  },
+  typeCount: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 16 },
+  typeLabel: { color: colors.muted, fontFamily: "DMSans", fontSize: 12 },
+
+  olToday: { color: colors.muted, fontFamily: "DMSans", fontSize: 13, marginBottom: 10 },
+  olLoading: { paddingVertical: 24, alignItems: "center" },
+  olEmpty: {
+    alignItems: "center", gap: 8, padding: 18, marginBottom: 12, borderRadius: 14,
+    backgroundColor: colors.surfaceSecondary, borderWidth: 1, borderColor: colors.border,
+  },
+  olEmptyText: { color: colors.muted, fontFamily: "DMSans", fontSize: 13, textAlign: "center" },
+  olHead: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 4 },
+  olCount: { backgroundColor: colors.brandPrimary, borderRadius: 12, minWidth: 26, height: 26, paddingHorizontal: 8, alignItems: "center", justifyContent: "center", marginBottom: 12 },
+  olCountText: { color: colors.onBrandPrimary, fontFamily: "DMSans", fontSize: 13, fontWeight: "700" },
+  olCard: {
+    flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: colors.surfaceSecondary,
+    borderRadius: 12, borderLeftWidth: 4, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: colors.border,
+  },
+  olName: { color: colors.onSurface, fontFamily: "DMSans", fontSize: 15, fontWeight: "700" },
+  olMeta: { color: colors.muted, fontFamily: "DMSans", fontSize: 12, marginTop: 2 },
+  olDates: { color: colors.onSurface, fontFamily: "DMSans", fontSize: 13, marginTop: 6 },
+  olReason: { color: colors.muted, fontFamily: "DMSans", fontSize: 12, marginTop: 2, fontStyle: "italic" },
+  olBadge: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 10, paddingVertical: 6, maxWidth: 110 },
+  olBadgeText: { fontFamily: "DMSans", fontSize: 12, fontWeight: "700", textAlign: "center" },
+  olMore: { alignSelf: "center", paddingVertical: 8, paddingHorizontal: 12 },
+  olMoreText: { color: colors.brandPrimary, fontFamily: "DMSans", fontSize: 13, fontWeight: "600" },
+
+  sectionTitle: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 20, letterSpacing: 1, marginBottom: 12 },
+  recentCard: {
+    flexDirection: "row", alignItems: "center", gap: 12, backgroundColor: colors.surfaceSecondary,
+    borderRadius: 12, borderLeftWidth: 3, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: colors.border,
+  },
+  recentName: { color: colors.onSurface, fontFamily: "DMSans", fontSize: 15, fontWeight: "600" },
+  recentMeta: { color: colors.muted, fontFamily: "DMSans", fontSize: 12, marginTop: 2 },
+  recentDate: { fontFamily: "DMSans", fontSize: 13, fontWeight: "700" },
+
+  row: {
+    flexDirection: "row", alignItems: "center", gap: 12, marginHorizontal: 16, marginBottom: 10,
+    backgroundColor: colors.surfaceSecondary, borderRadius: 12, borderWidth: 1, borderColor: colors.border, padding: 12,
+  },
+  avatar: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.brandTertiary, borderWidth: 1, borderColor: colors.brandPrimary, alignItems: "center", justifyContent: "center" },
+  avatarText: { color: colors.brandPrimary, fontFamily: "Oswald", fontSize: 17 },
+  rowName: { color: colors.onSurface, fontFamily: "DMSans", fontSize: 15, fontWeight: "700" },
+  rowSub: { color: colors.brandPrimary, fontFamily: "DMSans", fontSize: 12, marginTop: 1 },
+  rowJab: { color: colors.muted, fontFamily: "DMSans", fontSize: 12, marginTop: 1 },
+  rowRight: { flexDirection: "row", alignItems: "center", gap: 8 },
+  countPill: { minWidth: 26, height: 26, borderRadius: 13, backgroundColor: colors.surfaceTertiary, alignItems: "center", justifyContent: "center", paddingHorizontal: 6 },
+  countText: { color: colors.brandPrimary, fontFamily: "Oswald", fontSize: 14 },
 }));
