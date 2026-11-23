@@ -164,6 +164,9 @@ export default function Profile() {
                   <View key={lv.id} style={[styles.leaveCard, { borderLeftColor: accent }]} testID={`leave-${lv.id}`}>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.leaveDate}>{formatDateLong(lv.tanggal)}</Text>
+                      {lv.tanggal_kembali ? (
+                        <Text style={styles.leaveReturn}>Kembali: {formatDateLong(lv.tanggal_kembali)}</Text>
+                      ) : null}
                       {lv.alasan ? <Text style={styles.leaveReason}>{lv.alasan}</Text> : <Text style={styles.leaveReasonMuted}>Tanpa keterangan</Text>}
                     </View>
                     {isAdmin ? (
@@ -294,15 +297,19 @@ function LeaveForm({
   const toast = useToast();
   const [jenis, setJenis] = useState<LeaveKey>((edit?.jenis as LeaveKey) ?? initialJenis);
   const [tanggal, setTanggal] = useState(edit?.tanggal ? edit.tanggal.slice(0, 10) : "");
+  const [kembali, setKembali] = useState(edit?.tanggal_kembali ? edit.tanggal_kembali.slice(0, 10) : "");
   const [alasan, setAlasan] = useState(edit?.alasan ?? "");
 
   const mut = useMutation({
     mutationFn: async () => {
-      if (!tanggal) throw new Error("Silakan pilih tanggal dulu");
-      if (edit) {
-        return api.updateLeave(person.id, edit.id, { jenis, tanggal, alasan });
+      if (!tanggal) throw new Error("Silakan pilih tanggal berangkat dulu");
+      if (kembali && kembali < tanggal) {
+        throw new Error("Tanggal kembali tidak boleh sebelum tanggal berangkat");
       }
-      return api.addLeave(person.id, { jenis, tanggal, alasan });
+      if (edit) {
+        return api.updateLeave(person.id, edit.id, { jenis, tanggal, tanggal_kembali: kembali, alasan });
+      }
+      return api.addLeave(person.id, { jenis, tanggal, tanggal_kembali: kembali || null, alasan });
     },
     onSuccess: () => { Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}); onSaved(); },
     onError: (e: any) => toast(e.message, "error"),
@@ -329,8 +336,16 @@ function LeaveForm({
         })}
       </View>
 
-      <Text style={styles.fieldLabel}>Tanggal</Text>
-      <DatePickerField testID="leave-date-field" value={tanggal} onChange={setTanggal} placeholder="Ketuk untuk pilih tanggal" />
+      <Text style={styles.fieldLabel}>Tanggal Berangkat</Text>
+      <DatePickerField testID="leave-date-field" value={tanggal} onChange={setTanggal} placeholder="Ketuk untuk pilih tanggal berangkat" />
+
+      <Text style={styles.fieldLabel}>Tanggal Kembali (kosongkan jika hanya 1 hari)</Text>
+      <DatePickerField testID="leave-return-field" value={kembali} onChange={setKembali} placeholder="Ketuk untuk pilih tanggal kembali" />
+      {kembali ? (
+        <Pressable testID="clear-return-date" onPress={() => setKembali("")} hitSlop={8}>
+          <Text style={styles.clearLink}>Hapus tanggal kembali</Text>
+        </Pressable>
+      ) : null}
 
       <Text style={styles.fieldLabel}>Alasan / Keterangan</Text>
       <TextInput
@@ -448,6 +463,8 @@ const useStyles = makeStyles((colors) => ({
     borderRadius: 10, borderLeftWidth: 3, borderWidth: 1, borderColor: colors.border, padding: 14, marginBottom: 8,
   },
   leaveDate: { color: colors.onSurface, fontFamily: "DMSans", fontSize: 15, fontWeight: "700" },
+  leaveReturn: { color: colors.brandPrimary, fontFamily: "DMSans", fontSize: 13, fontWeight: "600", marginTop: 2 },
+  clearLink: { color: colors.muted, fontFamily: "DMSans", fontSize: 12, marginTop: 6, textDecorationLine: "underline" },
   leaveReason: { color: colors.onSurfaceSecondary, fontFamily: "DMSans", fontSize: 13, marginTop: 2 },
   leaveReasonMuted: { color: colors.muted, fontFamily: "DMSans", fontSize: 13, marginTop: 2, fontStyle: "italic" },
   leaveActions: { flexDirection: "row", gap: 16, alignItems: "center" },
