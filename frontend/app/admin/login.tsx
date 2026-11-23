@@ -49,7 +49,7 @@ export default function AdminLogin() {
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <Pressable testID="back-button" onPress={() => router.back()} hitSlop={10} style={styles.headerBtn}>
+        <Pressable testID="back-button" onPress={() => router.replace("/")} hitSlop={10} style={styles.headerBtn}>
           <Icon name="ArrowLeft" size={22} color={colors.onSurface} />
         </Pressable>
       </View>
