@@ -27,9 +27,33 @@ async function handle(res: Response) {
 export type LeaveEntry = {
   id: string;
   jenis: string;
-  tanggal: string;
+  tanggal: string; // tanggal berangkat
+  tanggal_kembali?: string | null; // tanggal kembali bertugas
   alasan: string;
   source?: string;
+};
+
+export type OnLeaveItem = {
+  personnel_id: string;
+  nama: string;
+  pangkat: string;
+  satfung: string;
+  jenis: string;
+  label: string;
+  tanggal: string;
+  tanggal_kembali: string | null;
+  alasan: string;
+  sisa_hari?: number | null;
+  hari_ke?: number;
+  berangkat_dalam?: number;
+};
+
+export type OnLeave = {
+  today: string;
+  akan_hari: number;
+  sedang: OnLeaveItem[];
+  kembali_hari_ini: OnLeaveItem[];
+  akan: OnLeaveItem[];
 };
 
 export type Personnel = {
@@ -101,6 +125,10 @@ export const api = {
     return handle(await fetch(`${BASE}/stats${qs}`));
   },
 
+  async onLeave(): Promise<OnLeave> {
+    return handle(await fetch(`${BASE}/on-leave`));
+  },
+
   async recap(tahun?: number, satfung?: string): Promise<Recap> {
     const sp = new URLSearchParams();
     if (tahun) sp.set("tahun", String(tahun));
@@ -149,7 +177,7 @@ export const api = {
     }));
   },
 
-  async addLeave(pid: string, data: { jenis: string; tanggal: string; alasan: string }) {
+  async addLeave(pid: string, data: { jenis: string; tanggal: string; tanggal_kembali?: string | null; alasan: string }) {
     return handle(await fetch(`${BASE}/personnel/${pid}/leaves`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(await authHeaders()) },
