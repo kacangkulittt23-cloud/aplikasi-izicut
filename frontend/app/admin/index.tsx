@@ -2,10 +2,13 @@ import { useQuery } from "@tanstack/react-query";
 import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
 import { useRouter } from "expo-router";
+import * as DocumentPicker from "expo-document-picker";
+import * as Linking from "expo-linking";
 import * as Haptics from "expo-haptics";
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   ScrollView,
@@ -16,6 +19,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { api, OnLeaveItem, Personnel } from "@/src/api/client";
+import { queryClient } from "@/src/query-client";
 import { Icon } from "@/src/components/icon";
 import { LEAVE_ORDER, metaFor } from "@/src/constants/leave";
 import { useAuth } from "@/src/context/auth";
@@ -32,12 +36,63 @@ export default function Dashboard() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { isAdmin } = useAuth();
+  const { ready, isAdmin, logout } = useAuth();
 
   const [q, setQ] = useState("");
   const [year, setYear] = useState<number | null>(null);
   const [satfung, setSatfung] = useState<string | null>(null);
   const [jenis, setJenis] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+
+  useEffect(() => {
+    if (ready && !isAdmin) router.replace("/admin/login");
+  }, [ready, isAdmin, router]);
+
+  const downloadTemplate = async () => {
+    try {
+      await Linking.openURL(api.templateUrl());
+    } catch (e: any) {
+      Alert.alert("Download gagal", e?.message || "Template belum dapat dibuka.");
+    }
+  };
+
+  const uploadTemplate = async () => {
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: [
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "application/vnd.ms-excel.sheet.macroEnabled.12",
+        ],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (picked.canceled || !picked.assets?.length) return;
+      const file = picked.assets[0];
+      setImporting(true);
+      const result = await api.importExcel(file.uri, file.name, file.mimeType, (file as any).file);
+      Alert.alert(
+        "Import berhasil",
+        `Total data: ${result.total}\nDitambahkan: ${result.ditambahkan}\nDiperbarui: ${result.diperbarui}\nTahun: ${result.tahun.join(", ")}`,
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["years"] }),
+        queryClient.invalidateQueries({ queryKey: ["personnel"] }),
+        queryClient.invalidateQueries({ queryKey: ["stats"] }),
+        queryClient.invalidateQueries({ queryKey: ["satfung"] }),
+        queryClient.invalidateQueries({ queryKey: ["on-leave"] }),
+      ]);
+    } catch (e: any) {
+      Alert.alert("Import gagal", e?.message || "File Excel tidak dapat diproses.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  const goToUserHome = () => router.replace("/");
+  const exitAdmin = async () => {
+    await logout();
+    router.replace("/");
+  };
 
   const yearsQ = useQuery({ queryKey: ["years"], queryFn: () => api.years() });
   const activeYear = year ?? yearsQ.data?.[0] ?? null;
@@ -100,6 +155,38 @@ export default function Dashboard() {
 
   const Header = (
     <View>
+      <View style={styles.adminTools}>
+        <View style={styles.adminToolsTop}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.adminToolsTitle}>PANEL ADMIN</Text>
+            <Text style={styles.adminToolsSubtitle}>Kelola data personil dan pembaruan tahunan</Text>
+          </View>
+          <Pressable testID="admin-home-button" onPress={goToUserHome} style={styles.adminNavButton}>
+            <Icon name="ArrowLeft" size={16} color={colors.brandPrimary} />
+            <Text style={styles.adminNavText}>Beranda</Text>
+          </Pressable>
+          <Pressable testID="admin-logout-button" onPress={exitAdmin} style={styles.adminNavButton}>
+            <Icon name="SignOut" size={16} color={colors.onSurfaceSecondary} />
+            <Text style={styles.adminNavText}>Keluar</Text>
+          </Pressable>
+        </View>
+        <View style={styles.templateActions}>
+          <Pressable testID="download-template-button" onPress={downloadTemplate} style={({ pressed }) => [styles.templateButton, styles.templateDownload, pressed && styles.pressed]}>
+            <Icon name="DownloadSimple" size={19} color={colors.onBrandPrimary} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.templateButtonTitle}>Download Template</Text>
+              <Text style={styles.templateButtonSub}>Unduh format Excel resmi</Text>
+            </View>
+          </Pressable>
+          <Pressable testID="upload-template-button" onPress={uploadTemplate} disabled={importing} style={({ pressed }) => [styles.templateButton, styles.templateUpload, pressed && styles.pressed, importing && { opacity: 0.6 }]}>
+            {importing ? <ActivityIndicator color={colors.onBrandPrimary} /> : <Icon name="UploadSimple" size={19} color={colors.onBrandPrimary} />}
+            <View style={{ flex: 1 }}>
+              <Text style={styles.templateButtonTitle}>{importing ? "Mengimpor..." : "Upload Data Excel"}</Text>
+              <Text style={styles.templateButtonSub}>Perbarui banyak personil sekaligus</Text>
+            </View>
+          </Pressable>
+        </View>
+      </View>
       <View style={styles.hero}>
         <Image source={{ uri: HERO }} style={ABS} contentFit="cover" transition={300} />
         <LinearGradient
@@ -467,6 +554,18 @@ function OnLeaveSection({ onOpen }: { onOpen: (id: string) => void }) {
 
 const useStyles = makeStyles((colors) => ({
   container: { flex: 1, backgroundColor: colors.surface },
+  adminTools: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12, backgroundColor: colors.surfaceSecondary, borderBottomWidth: 1, borderBottomColor: colors.border },
+  adminToolsTop: { flexDirection: "row", alignItems: "center", gap: 8, marginBottom: 12 },
+  adminToolsTitle: { color: colors.onSurface, fontFamily: "Oswald", fontSize: 20, letterSpacing: 1 },
+  adminToolsSubtitle: { color: colors.muted, fontFamily: "DMSans", fontSize: 11, marginTop: 2 },
+  adminNavButton: { flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 9, paddingVertical: 9, borderRadius: 9, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
+  adminNavText: { color: colors.onSurface, fontFamily: "DMSans", fontSize: 11, fontWeight: "600" },
+  templateActions: { flexDirection: "row", gap: 10 },
+  templateButton: { flex: 1, minHeight: 66, flexDirection: "row", alignItems: "center", gap: 10, padding: 12, borderRadius: 11 },
+  templateDownload: { backgroundColor: colors.brandPrimary },
+  templateUpload: { backgroundColor: colors.onInfo },
+  templateButtonTitle: { color: colors.onBrandPrimary, fontFamily: "DMSans", fontSize: 12, fontWeight: "700" },
+  templateButtonSub: { color: colors.onBrandPrimary, fontFamily: "DMSans", fontSize: 10, marginTop: 3, opacity: 0.9 },
   center: { alignItems: "center", justifyContent: "center", paddingVertical: 48, gap: 12 },
   emptyText: { color: colors.muted, fontFamily: "DMSans", fontSize: 14 },
   pressed: { opacity: 0.7 },
